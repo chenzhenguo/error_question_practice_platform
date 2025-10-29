@@ -1,0 +1,40 @@
+/* Import/Export and Bulk Actions modals */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:60}
+.modal{width:100%;max-width:960px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden}
+.modal header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e5e7eb}
+.modal header h3{font-weight:700;color:#111827}
+.modal .body{padding:16px;max-height:70vh;overflow:auto}
+.modal footer{display:flex;gap:8px;justify-content:flex-end;padding:14px 16px;border-top:1px solid #e5e7eb}
+.modal .step-indicator{display:flex;gap:8px;margin-bottom:12px}
+.modal .step{padding:6px 10px;border-radius:999px;border:1px solid #e5e7eb;color:#4b5563;font-size:12px}
+.modal .step.active{background:#1e40af;color:#fff;border-color:#1e40af}
+
+.table{width:100%;border-collapse:collapse}
+.table th,.table td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:left;font-size:14px}
+.table th{background:#f9fafb;font-weight:600;color:#374151}
+
+.badge{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px}
+.badge.danger{background:#fee2e2;color:#b91c1c}
+.badge.warn{background:#fef3c7;color:#92400e}
+.badge.ok{background:#dcfce7;color:#166534}
+
+.row-error{background:#fff1f2}
+
+.small{font-size:12px;color:#6b7280}
+
+.field-grid{display:grid;grid-template-columns:180px 1fr;gap:8px;align-items:center}
+
+.sticky-actions{position:sticky;bottom:0;background:#fff;border-top:1px solid #e5e7eb;padding:10px 0}
+
+/* Simple utility classes to avoid extra Tailwind for dynamic DOM */
+.btn{display:inline-flex;align-items:center;gap:6px;background:#1e40af;color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer}
+.btn.secondary{background:#6b7280}
+.btn.ghost{background:#f3f4f6;color:#111827}
+.btn.danger{background:#b91c1c}
+.btn.success{background:#059669}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+
+.input,select{border:1px solid #d1d5db;border-radius:8px;padding:8px 10px}
+.checkbox{width:16px;height:16px}
+
+hr.soft{border:0;height:1px;background:#e5e7eb;margin:10px 0}
