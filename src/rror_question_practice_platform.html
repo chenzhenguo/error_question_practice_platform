@@ -206,10 +206,12 @@
                             </div>
                             <select id="filter-knowledge" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
                                 <option value="">按知识点筛选</option>
-                                <option value="定语从句">定语从句</option>
-                                <option value="虚拟语气">虚拟语气</option>
-                                <option value="比较级">比较级</option>
-                                <option value="时态">时态</option>
+                            </select>
+                            <select id="filter-type" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                <option value="">按题型筛选</option>
+                            </select>
+                            <select id="filter-error-tag" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                <option value="">按错因标签筛选</option>
                             </select>
                             <button id="export-questions" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
                                 <i class="fa fa-download mr-2"></i>导出
@@ -225,6 +227,9 @@
                                 <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">题目</th>
                                 <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">知识点</th>
                                 <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">题型</th>
+                                <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">错因标签</th>
+                                <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">错误原因</th>
+                                <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">正确思路/口诀</th>
                                 <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">来源</th>
                                 <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
                                 <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
@@ -365,6 +370,20 @@
                                 <i class="fa fa-stop mr-2"></i>结束练习
                             </button>
                         </div>
+                    </div>
+                </div>
+                <!-- 新增：练习设置开关栏 -->
+                <div id="practice-settings" class="px-6 py-3 bg-gray-50 border-b border-gray-200">
+                    <div class="flex flex-wrap items-center gap-6">
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                            <input id="setting-auto-next" type="checkbox" class="h-4 w-4 text-primary">答对自动下一题
+                        </label>
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                            <input id="setting-memorize" type="checkbox" class="h-4 w-4 text-primary">开启背题模式
+                        </label>
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                            <input id="setting-shuffle" type="checkbox" class="h-4 w-4 text-primary" checked>选项乱序
+                        </label>
                     </div>
                 </div>
                 
@@ -638,6 +657,32 @@
         let currentQuestionIndex = 0;
         let practiceStartTime = null;
         let practiceAnswers = [];
+        // 新增：防止“答对自动下一题”与手动下一题冲突的定时器ID
+        let autoNextTimerId = null;
+        // 新增：远程控制台桥接（?debug=1 或 window.__DEBUG__=true 时启用，将浏览器 Console 日志通过 /__log GET 上报到本地 http.server，便于 mcp 读取）
+        (function setupRemoteConsoleBridge(){
+            try {
+                const qs = new URLSearchParams(location.search || '');
+                const enabled = (qs.get('debug') === '1') || (window.__DEBUG__ === true);
+                if (!enabled) return;
+                function sendLog(level, args){
+                    try {
+                        const text = args.map(a => { try { return typeof a === 'string' ? a : JSON.stringify(a); } catch(e){ return String(a); } }).join(' ');
+                        const url = '/__log?level=' + encodeURIComponent(level) + '&t=' + Date.now() + '&msg=' + encodeURIComponent(text).slice(0, 1800);
+                        const img = new Image();
+                        img.src = url; // GET 请求会被 python -m http.server 记录到终端
+                    } catch(e){}
+                }
+                ['log','info','warn','error','debug'].forEach(method => {
+                    const orig = console[method];
+                    console[method] = function(...args){
+                        sendLog(method, args);
+                        try { return orig.apply(console, args); } catch(e){}
+                    };
+                });
+                console.info('[debug] remote console bridge enabled');
+            } catch(e){}
+        })();
         let studyData = {
             totalStudyTime: 0,
             totalAnswered: 0,
@@ -645,6 +690,64 @@
             studyDays: 0,
             dailyData: []
         };
+        // 新增：练习设置（答对自动下一题/背题模式/选项乱序）
+        let practiceSettings = { autoNext: false, memorize: false, shuffle: true };
+        function loadPracticeSettings() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('practiceSettings') || '{}');
+                practiceSettings = {
+                    autoNext: !!saved.autoNext,
+                    memorize: !!saved.memorize,
+                    shuffle: saved.shuffle === undefined ? true : !!saved.shuffle
+                };
+            } catch (e) {
+                practiceSettings = { autoNext: false, memorize: false, shuffle: true };
+            }
+        }
+        function savePracticeSettings() {
+            localStorage.setItem('practiceSettings', JSON.stringify(practiceSettings));
+        }
+        function isMemorizeActive() {
+            return currentPracticeMode === 'memorize' || !!practiceSettings.memorize;
+        }
+        function shouldShuffleOptions() {
+            return currentPracticeMode === 'random' || !!practiceSettings.shuffle;
+        }
+        function setupPracticeSettingsUI() {
+            loadPracticeSettings();
+            const autoNextEl = document.getElementById('setting-auto-next');
+            const memorizeEl = document.getElementById('setting-memorize');
+            const shuffleEl = document.getElementById('setting-shuffle');
+            if (autoNextEl) autoNextEl.checked = !!practiceSettings.autoNext;
+            if (memorizeEl) memorizeEl.checked = !!practiceSettings.memorize;
+            if (shuffleEl) shuffleEl.checked = !!practiceSettings.shuffle;
+            [autoNextEl, memorizeEl, shuffleEl].forEach((el) => {
+                if (!el) return;
+                el.addEventListener('change', () => {
+                    practiceSettings.autoNext = !!autoNextEl.checked;
+                    practiceSettings.memorize = !!memorizeEl.checked;
+                    practiceSettings.shuffle = !!shuffleEl.checked;
+                    savePracticeSettings();
+                    applyPracticeSettingsUI();
+                    console.log('[settings.changed]', JSON.parse(JSON.stringify(practiceSettings)));
+                });
+            });
+            applyPracticeSettingsUI();
+        }
+        function applyPracticeSettingsUI() {
+            const showAnswerBtn = document.getElementById('show-answer');
+            const nextBtn = document.getElementById('next-question');
+            const answerPanel = document.getElementById('answer-analysis');
+            if (!showAnswerBtn || !nextBtn || !answerPanel) return;
+            if (isMemorizeActive()) {
+                showAnswerBtn.classList.remove('hidden');
+                nextBtn.classList.add('hidden');
+                answerPanel.classList.add('hidden');
+            } else {
+                showAnswerBtn.classList.add('hidden');
+                nextBtn.classList.remove('hidden');
+            }
+        }
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
@@ -661,6 +764,8 @@
             
             // 练习功能
             setupPracticeFeatures();
+            // 新增：设置开关初始化
+            setupPracticeSettingsUI();
             
             // 每日一练设置
             setupDailyPractice();
@@ -815,30 +920,120 @@
             const worksheet = workbook.Sheets[firstSheetName];
             const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
-            return jsonData.map((row, index) => ({
-                id: Date.now() + index,
-                date: row['日期'] || new Date().toISOString().split('T')[0],
-                source: row['题目来源'] || '导入试题',
-                priority: row['考试优先级'] || '',
-                questionNumber: row['题号'] || index + 1,
-                type: row['题型'] || '选择题',
-                knowledge: row['知识点'] || '',
-                specificKnowledge: row['具体考点'] || '',
-                content: row['题目'] || '',
-                options: row['选项'] || '',
-                myAnswer: row['我的答案'] || '',
-                correctAnswer: row['正确答案'] || '',
-                analysis: row['考点解析'] || '',
-                tags: row['题型/错因标签'] || '',
-                errorReason: row['错误原因'] || '',
-                correctMethod: row['正确思路/口诀'] || '',
-                review1: row['复习1'] || '',
-                review2: row['复习2'] || '',
-                review3: row['复习3'] || '',
-                status: row['状态'] || '未练习',
-                errorCount: 0,
-                lastErrorTime: null
-            })).filter(question => question.content.trim() !== '');
+            return jsonData.map((row, index) => {
+                const toHalf = t => String(t || '').replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/\u3000/g, ' ');
+                const normalize = t => toHalf(t).trim();
+                const splitTags = (s) => String(s || '').split(/[，,、\/\s]+/).map(x=>normalize(x)).filter(Boolean);
+                const combined = row['题型/错因标签'];
+                let type = row['题型'] || '';
+                let errorTags = splitTags(row['错因标签'] || row['错因'] || row['标签']);
+                if (combined && !type) {
+                    const parts = splitTags(combined);
+                    if (parts.length) {
+                        type = parts[0];
+                        errorTags = errorTags.length ? errorTags : parts.slice(1);
+                    }
+                } else if (combined) {
+                    // 若已有题型，则 combined 作为补充标签来源
+                    errorTags = errorTags.length ? errorTags : splitTags(combined);
+                }
+
+                const obj = {
+                    id: Date.now() + index,
+                    date: row['日期'] || new Date().toISOString().split('T')[0],
+                    source: row['题目来源'] || '导入试题',
+                    priority: row['考试优先级'] || '',
+                    questionNumber: row['题号'] || index + 1,
+                    type: type || '选择题',
+                    knowledge: row['知识点'] || '',
+                    specificKnowledge: row['具体考点'] || '',
+                    content: row['题目'] || '',
+                    options: (function(s){ 
+                        const candidates = [s, row['选项为'], row['选项内容'], row['Options'], row['Option'], row['选项列']];
+                        let raw = candidates.find(v => v != null && String(v).trim() !== '');
+                        if (raw == null) return '';
+                        let str = normalize(raw).replace(/\r?\n/g, '\n');
+                        const tokenRe = /(?:^|[\s\n\r])[\(（]?([A-F])[\)）]?[\.、．，,)）]?\s*/g;
+                        const marks = [];
+                        let m;
+                        while ((m = tokenRe.exec(str))) { marks.push({ key: m[1], matchIndex: m.index, contentStart: tokenRe.lastIndex }); }
+                        if (marks.length >= 2) {
+                            const out = [];
+                            for (let i=0;i<marks.length;i++) {
+                                const cur = marks[i], next = marks[i+1];
+                                const seg = str.slice(cur.contentStart, next ? next.matchIndex : str.length).trim().replace(/^[\s:：-]+/,'');
+                                out.push({ key: cur.key, text: seg });
+                            }
+                            return out;
+                        }
+                        const lines = str.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+                        if (lines.length) {
+                            const arr = lines.map((line,i) => {
+                                const m2 = line.match(/^\(?([A-F])\)?[\.、．，\)]?\s*(.*)$/);
+                                return m2 ? { key: m2[1], text: m2[2] } : { key: String.fromCharCode(65+i), text: line };
+                            });
+                            return arr;
+                        }
+                        return str;
+                    })(row['选项']),
+                    myAnswer: (function(ans){
+                        const letter = normalize(ans).match(/^\(?([A-F])\)?[\.、．，\)]?/i);
+                        if (letter) return letter[1].toUpperCase();
+                        const candidates = [row['选项'], row['选项为'], row['选项内容'], row['Options'], row['Option'], row['选项列']];
+                        let rawOpt = candidates.find(v => v != null && String(v).trim() !== '');
+                        if (!rawOpt) return normalize(ans).toUpperCase();
+                        const parse = (raw)=>{
+                            let s = normalize(raw).replace(/\r?\n/g,'\n');
+                            const tokenRe = /(?:^|[\s\n\r])[\(（]?([A-F])[\)）]?[\.、．，,)）]?\s*/g;
+                            const marks=[]; let m; while((m = tokenRe.exec(s))){ marks.push({key:m[1], contentStart: tokenRe.lastIndex, index:m.index}); }
+                            if (marks.length >= 2){
+                                const out=[]; for(let i=0;i<marks.length;i++){ const cur=marks[i], next=marks[i+1]; const seg=s.slice(cur.contentStart, next?next.index:s.length).trim().replace(/^[\s:：-]+/,''); out.push({key:cur.key, text:seg}); } return out;
+                            }
+                            const lines = s.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+                            if (lines.length){ return lines.map((line,i)=>{ const mm=line.match(/^\(?([A-F])\)?[\.、．，\)]?\s*(.*)$/); return mm?{key:mm[1], text:mm[2]}:{key:String.fromCharCode(65+i), text:line}; }); }
+                            return [];
+                        };
+                        const opts = parse(rawOpt);
+                        const target = normalize(ans).replace(/^[A-F][\.、．，\)]?\s*/i,'');
+                        const found = opts.find(o => normalize(o.text).toLowerCase() === target.toLowerCase());
+                        return found ? found.key.toUpperCase() : normalize(ans).toUpperCase();
+                    })(row['我的答案']),
+                    correctAnswer: (function(ans){
+                        const letter = normalize(ans).match(/^\(?([A-F])\)?[\.、．，\)]?/i);
+                        if (letter) return letter[1].toUpperCase();
+                        const candidates = [row['选项'], row['选项为'], row['选项内容'], row['Options'], row['Option'], row['选项列']];
+                        let rawOpt = candidates.find(v => v != null && String(v).trim() !== '');
+                        if (!rawOpt) return normalize(ans).toUpperCase();
+                        const parse = (raw)=>{
+                            let s = normalize(raw).replace(/\r?\n/g,'\n');
+                            const tokenRe = /(?:^|[\s\n\r])[\(（]?([A-F])[\)）]?[\.、．，,)）]?\s*/g;
+                            const marks=[]; let m; while((m = tokenRe.exec(s))){ marks.push({key:m[1], contentStart: tokenRe.lastIndex, index:m.index}); }
+                            if (marks.length >= 2){
+                                const out=[]; for(let i=0;i<marks.length;i++){ const cur=marks[i], next=marks[i+1]; const seg=s.slice(cur.contentStart, next?next.index:s.length).trim().replace(/^[\s:：-]+/,''); out.push({key:cur.key, text:seg}); } return out;
+                            }
+                            const lines = s.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+                            if (lines.length){ return lines.map((line,i)=>{ const mm=line.match(/^\(?([A-F])\)?[\.、．，\)]?\s*(.*)$/); return mm?{key:mm[1], text:mm[2]}:{key:String.fromCharCode(65+i), text:line}; }); }
+                            return [];
+                        };
+                        const opts = parse(rawOpt);
+                        const target = normalize(ans).replace(/^[A-F][\.、．，\)]?\s*/i,'');
+                        const found = opts.find(o => normalize(o.text).toLowerCase() === target.toLowerCase());
+                        return found ? found.key.toUpperCase() : normalize(ans).toUpperCase();
+                    })(row['正确答案']),
+                    analysis: row['考点解析'] || '',
+                    tags: row['题型/错因标签'] || '',
+                    errorTags: errorTags,
+                    errorReason: row['错误原因'] || '',
+                    correctMethod: row['正确思路/口诀'] || row['口诀'] || '',
+                    review1: row['复习1'] || '',
+                    review2: row['复习2'] || '',
+                    review3: row['复习3'] || '',
+                    status: row['状态'] || '未练习',
+                    errorCount: 0,
+                    lastErrorTime: null
+                };
+                return obj;
+            }).filter(question => String(question.content || '').trim() !== '');
         }
 
         function importFromText(data) {
@@ -868,9 +1063,45 @@
                     if (currentQuestion) {
                         currentQuestion.correctAnswer = trimmedLine.substring(2).trim();
                     }
-                } else if (trimmedLine.match(/^[A-D]\./)) {
+                } else if (/^[A-D]\./.test(trimmedLine)) {
                     if (currentQuestion) {
                         currentQuestion.options += trimmedLine + '\n';
+                    }
+                } else {
+                    if (currentQuestion) {
+                        // 检测内联ABCD选项，一行中包含>=2个选项标记时按内联解析
+                        const inlineToken = /(?:^|[\s\n\r])[\(（]?([A-D])[\)）]?[\.、．，\)]?\s*/g;
+                        let inlineCount = 0; 
+                        trimmedLine.replace(inlineToken, () => { inlineCount++; return ''; });
+                        if (inlineCount >= 2) {
+                            const parsed = (function(str){ 
+                                const toHalf = t => String(t).replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/\u3000/g, ' ');
+                                const normalize = t => toHalf(t).trim();
+                                let s = normalize(str).replace(/\r?\n/g, '\n');
+                                const tokenRe = /(?:^|[\s\n\r])[\(（]?([A-D])[\)）]?[\.、．，,)）]?\s*/g;
+                                const marks = []; let m;
+                                while ((m = tokenRe.exec(s))) { marks.push({ key: m[1], matchIndex: m.index, contentStart: tokenRe.lastIndex }); }
+                                if (marks.length >= 2) {
+                                    const out = [];
+                                    for (let i=0;i<marks.length;i++) {
+                                        const cur = marks[i], next = marks[i+1];
+                                        const seg = s.slice(cur.contentStart, next ? next.matchIndex : s.length).trim().replace(/^[\s:：-]+/,'');
+                                        out.push({ key: cur.key, text: seg });
+                                    }
+                                    return out;
+                                }
+                                const lines = s.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+                                if (lines.length) {
+                                    const arr = lines.map((line,i) => {
+                                        const m2 = line.match(/^\(?([A-D])\)?[\.、．，\)]?\s*(.*)$/);
+                                        return m2 ? { key: m2[1], text: m2[2] } : { key: String.fromCharCode(65+i), text: line };
+                                    });
+                                    return arr;
+                                }
+                                return [];
+                            })(trimmedLine);
+                            currentQuestion.options = parsed;
+                        }
                     }
                 }
             });
@@ -898,6 +1129,10 @@
             practiceModeCards.forEach(card => {
                 card.addEventListener('click', function() {
                     const mode = this.dataset.mode;
+                    if (mode === 'chapter') {
+                        openKnowledgeFilterModal();
+                        return;
+                    }
                     startPractice(mode);
                 });
             });
@@ -942,6 +1177,9 @@
             });
         }
 
+        // 全局知识点筛选缓存
+        window.selectedKnowledgeFilter = [];
+
         function startPractice(mode) {
             if (questions.length === 0 && mode !== 'error') {
                 showModal('提示', '题库为空，请先导入试题');
@@ -974,8 +1212,18 @@
                     practiceQuestions = [...questions].sort(() => Math.random() - 0.5).slice(0, 50);
                     break;
                 case 'chapter':
-                    const selectedKnowledge = document.getElementById('selected-knowledge')?.value;
-                    practiceQuestions = questions.filter(q => q.knowledge === selectedKnowledge);
+                    // 兼容旧的下拉选择（如果有）
+                    {
+                        const selectedKnowledge = document.getElementById('selected-knowledge')?.value;
+                        practiceQuestions = questions.filter(q => q.knowledge === selectedKnowledge);
+                    }
+                    break;
+                case 'knowledge':
+                    if (Array.isArray(window.selectedKnowledgeFilter) && window.selectedKnowledgeFilter.length > 0) {
+                        practiceQuestions = questions.filter(q => window.selectedKnowledgeFilter.includes(q.knowledge));
+                    } else {
+                        practiceQuestions = [];
+                    }
                     break;
                 case 'memorize':
                     practiceQuestions = [...questions].sort(() => Math.random() - 0.5);
@@ -983,7 +1231,10 @@
             }
 
             if (practiceQuestions.length === 0) {
-                showModal('提示', '没有符合条件的题目');
+                const tip = (Array.isArray(window.selectedKnowledgeFilter) && window.selectedKnowledgeFilter.length > 0)
+                    ? `没有符合条件的题目。已选择知识点：${window.selectedKnowledgeFilter.join('、')}。请调整筛选条件或导入题目。`
+                    : '没有符合条件的题目，请调整筛选条件或导入题目。';
+                showModal('提示', tip);
                 return;
             }
 
@@ -1020,8 +1271,8 @@
             document.getElementById('show-answer').classList.add('hidden');
             document.getElementById('next-question').classList.add('hidden');
 
-            // 背题模式特殊处理
-            if (currentPracticeMode === 'memorize') {
+            // 背题模式特殊处理（支持设置开关）
+            if (isMemorizeActive()) {
                 document.getElementById('show-answer').classList.remove('hidden');
             } else {
                 document.getElementById('next-question').classList.remove('hidden');
@@ -1097,8 +1348,9 @@
 
             const parsed = parseOptions(question.options).filter(o => o && o.key && o.text);
             
-            // 随机模式下打乱选项（保留选项字母与内容的绑定）
-            const displayOptions = currentPracticeMode === 'random'
+            // 随机模式或开启“选项乱序”时打乱选项（保留选项字母与内容的绑定）
+            console.log('[loadOptions]', { shuffle: shouldShuffleOptions(), mode: currentPracticeMode, settingShuffle: !!(practiceSettings && practiceSettings.shuffle) });
+            const displayOptions = shouldShuffleOptions()
                 ? [...parsed].sort(() => Math.random() - 0.5)
                 : parsed;
 
@@ -1116,7 +1368,7 @@
                     this.querySelector('input').checked = true;
                     recordAnswer(question.id, optionLetter);
                     
-                    if (currentPracticeMode !== 'memorize') {
+                    if (!isMemorizeActive()) {
                         showAnswer();
                     }
                 });
@@ -1140,6 +1392,7 @@
             if (!selectedAnswer) return;
 
             const isCorrect = selectedAnswer === question.correctAnswer;
+            console.log('[showAnswer]', { selected: selectedAnswer, correct: question.correctAnswer, isCorrect, autoNext: !!(practiceSettings && practiceSettings.autoNext), memorizeActive: isMemorizeActive() });
             
             // 更新选项显示
             const optionElements = document.querySelectorAll('.option-item');
@@ -1168,6 +1421,15 @@
 
             // 更新统计
             updateCurrentAccuracy();
+
+            // 新增：答对自动跳转下一题（带防抖处理）
+             if (isCorrect && practiceSettings && practiceSettings.autoNext) {
+                 if (autoNextTimerId) { clearTimeout(autoNextTimerId); autoNextTimerId = null; }
+                 autoNextTimerId = setTimeout(() => {
+                     autoNextTimerId = null;
+                     nextQuestion();
+                 }, 500);
+             }
         }
 
         function addToErrorBook(question) {
@@ -1188,6 +1450,8 @@
         }
 
         function nextQuestion() {
+            console.log('[nextQuestion]', { from: currentQuestionIndex, total: window.currentPracticeQuestions?.length });
+            if (autoNextTimerId) { clearTimeout(autoNextTimerId); autoNextTimerId = null; }
             loadQuestion(currentQuestionIndex + 1);
         }
 
@@ -1225,6 +1489,8 @@
                 clearInterval(window.practiceTimerInterval);
                 window.practiceTimerInterval = null;
             }
+            // 清理自动跳转定时器，避免会话切换导致多次跳转
+            if (autoNextTimerId) { clearTimeout(autoNextTimerId); autoNextTimerId = null; }
 
             // 记录学习时间
             if (practiceStartTime) {
@@ -1412,6 +1678,19 @@
                 
                 const isError = errorQuestions.some(eq => eq.id === question.id);
                 
+                const errorTags = Array.isArray(question.errorTags) ? question.errorTags : (String(question.tags || '').split(/[，,、\/\s]+/).filter(Boolean));
+                const sanitize = s => String(s || '').trim().replace(/^[：:]+|[：:]+$/g, '');
+                const knowledge = sanitize(question.knowledge);
+                const qType = sanitize(question.type);
+                const source = sanitize(question.source);
+                const eReason = sanitize(question.errorReason);
+                const cMethod = sanitize(question.correctMethod);
+                row.setAttribute('data-knowledge', knowledge.toLowerCase());
+                row.setAttribute('data-type', qType.toLowerCase());
+                row.setAttribute('data-tags', errorTags.map(t => String(t).toLowerCase()).join(','));
+                row.setAttribute('data-errorreason', eReason.toLowerCase());
+                row.setAttribute('data-correctmethod', cMethod.toLowerCase());
+
                 row.innerHTML = `
                     <td class="px-6 py-4">
                         <div class="text-sm text-gray-900 max-w-xs truncate" title="${question.content}">
@@ -1419,13 +1698,24 @@
                         </div>
                     </td>
                     <td class="px-6 py-4">
-                        <span class="text-sm text-gray-600">${question.knowledge}</span>
+                        <span class="text-sm text-gray-600">${knowledge}</span>
                     </td>
                     <td class="px-6 py-4">
-                        <span class="text-sm text-gray-600">${question.type}</span>
+                        <span class="text-sm text-gray-600">${qType}</span>
                     </td>
                     <td class="px-6 py-4">
-                        <span class="text-sm text-gray-600">${question.source}</span>
+                        <div class="flex flex-wrap gap-1 max-w-xs">
+                            ${errorTags.map(t => `<span class='text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded'>${sanitize(t)}</span>`).join('')}
+                        </div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <div class="text-sm text-gray-600 max-w-xs truncate" title="${eReason}">${eReason || ''}</div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <div class="text-sm text-gray-600 max-w-xs truncate" title="${cMethod}">${cMethod || ''}</div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="text-sm text-gray-600">${source}</span>
                     </td>
                     <td class="px-6 py-4">
                         <span class="px-2 py-1 text-xs rounded-full ${isError ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
@@ -1435,6 +1725,9 @@
                     <td class="px-6 py-4">
                         <button class="text-primary hover:text-blue-700 mr-3 view-question" data-id="${question.id}">
                             <i class="fa fa-eye"></i>
+                        </button>
+                        <button class="text-yellow-600 hover:text-yellow-700 mr-3 edit-question" data-id="${question.id}">
+                            <i class="fa fa-edit"></i>
                         </button>
                         <button class="text-danger hover:text-red-700 delete-question" data-id="${question.id}">
                             <i class="fa fa-trash"></i>
@@ -1457,6 +1750,14 @@
                 btn.addEventListener('click', function() {
                     const questionId = parseInt(this.dataset.id);
                     deleteQuestion(questionId);
+                });
+            });
+
+            // 编辑题目
+            document.querySelectorAll('.edit-question').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const questionId = parseInt(this.dataset.id);
+                    openEditQuestion(questionId);
                 });
             });
         }
@@ -1655,9 +1956,19 @@
         function viewQuestionDetail(questionId) {
             const question = questions.find(q => q.id === questionId);
             if (!question) return;
-            
+
+            const toHalf = t => String(t || '').replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/\u3000/g, ' ');
+            const normalize = t => toHalf(t).trim();
+            const sanitize = s => String(s || '').trim().replace(/^[：:]+|[：:]+$/g, '');
+            const opts = Array.isArray(question.options) ? question.options : String(question.options || '').split(/\n+/).map((line,i) => ({ key: String.fromCharCode(65+i), text: line }));
+            const errorTags = Array.isArray(question.errorTags) ? question.errorTags : String(question.tags || '').split(/[，,、\/\s]+/).filter(Boolean);
+
+            const myAns = sanitize(question.myAnswer);
+            const correct = sanitize(question.correctAnswer);
+            const isCorrect = myAns && correct && myAns.toUpperCase() === correct.toUpperCase();
+
             const modalContent = `
-                <div class="space-y-4">
+                <div class="space-y-4 w-full max-w-3xl">
                     <div class="flex justify-between items-center">
                         <h3 class="text-lg font-bold text-gray-900">题目详情</h3>
                         <button id="close-modal" class="text-gray-400 hover:text-gray-600">
@@ -1667,31 +1978,183 @@
                     <div class="space-y-3">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">题目</label>
-                            <p class="text-gray-900">${question.content}</p>
+                            <p class="text-gray-900">${question.content || ''}</p>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">选项</label>
-                            <pre class="text-sm text-gray-600 bg-gray-50 p-2 rounded">${question.options}</pre>
+                            <pre class="text-sm text-gray-600 bg-gray-50 p-2 rounded">${Array.isArray(question.options) ? question.options.map(o => `${o.key}. ${o.text}`).join('\\n') : (question.options || '')}</pre>
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">正确答案</label>
-                            <p class="text-green-600 font-semibold">${question.correctAnswer}</p>
+                        <div class="bg-gray-50 rounded-lg p-3">
+                            <div class="flex items-center gap-3 flex-wrap">
+                                <span class="text-sm ${isCorrect ? 'text-green-700 bg-green-100' : 'text-red-700 bg-red-100'} px-2 py-1 rounded">${myAns ? (isCorrect ? '回答正确' : '回答错误') : '未作答'}</span>
+                                <span class="text-sm text-gray-700">我的答案：<b class="${isCorrect ? 'text-green-700' : 'text-red-700'}">${myAns || '—'}</b></span>
+                                <span class="text-sm text-gray-700">正确答案：<b class="text-green-700">${correct || '—'}</b></span>
+                            </div>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">解析</label>
-                            <p class="text-sm text-gray-600">${question.analysis || '暂无解析'}</p>
+                            <p class="text-sm text-gray-600">${sanitize(question.analysis) || '暂无解析'}</p>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">知识点</label>
+                                <p class="text-sm text-gray-600">${sanitize(question.knowledge)}</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">题型</label>
+                                <p class="text-sm text-gray-600">${sanitize(question.type)}</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">错因标签</label>
+                                <div class="flex flex-wrap gap-1">
+                                    ${errorTags.map(t => `<span class='text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded'>${sanitize(t)}</span>`).join('') || '<span class="text-xs text-gray-400">未设置</span>'}
+                                </div>
+                            </div>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">知识点</label>
-                            <p class="text-sm text-gray-600">${question.knowledge}</p>
+                            <label class="block text-sm font-medium text-gray-700">错误原因</label>
+                            <p class="text-sm text-gray-600 whitespace-pre-line">${sanitize(question.errorReason) || '未记录'}</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">正确思路/口诀</label>
+                            <p class="text-sm text-gray-600 whitespace-pre-line">${sanitize(question.correctMethod) || '未记录'}</p>
                         </div>
                     </div>
                 </div>
             `;
-            
+
             showModalContent(modalContent);
-            
+
             document.getElementById('close-modal').addEventListener('click', closeModal);
+        }
+
+        function openEditQuestion(questionId) {
+            const q = questions.find(x => x.id === questionId);
+            if (!q) return;
+
+            const toHalf = t => String(t || '').replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/\u3000/g, ' ');
+            const normalize = t => toHalf(t).trim();
+            const asDisplayOptions = (opts) => Array.isArray(opts) ? opts.map(o => `${o.key}. ${o.text}`).join('\n') : String(opts || '');
+
+            const modalContent = `
+                <div class="space-y-4 w-full max-w-3xl">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-lg font-bold text-gray-900">编辑题目</h3>
+                        <button id="close-modal" class="text-gray-400 hover:text-gray-600">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-1 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">题目</label>
+                            <textarea id="edit-content" rows="3" class="mt-1 block w-full border rounded p-2">${q.content || ''}</textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">选项（支持A./B./C./D.多行或内联A.xxx B.yyy）</label>
+                            <textarea id="edit-options" rows="6" class="mt-1 block w-full border rounded p-2">${asDisplayOptions(q.options)}</textarea>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">正确答案（支持A或A. xxx或纯文本）</label>
+                                <input id="edit-correct" class="mt-1 block w-full border rounded p-2" value="${q.correctAnswer || ''}" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">我的答案（可选）</label>
+                                <input id="edit-my" class="mt-1 block w-full border rounded p-2" value="${q.myAnswer || ''}" />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">解析</label>
+                            <textarea id="edit-analysis" rows="3" class="mt-1 block w-full border rounded p-2">${q.analysis || ''}</textarea>
+                        </div>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">知识点</label>
+                                <input id="edit-knowledge" class="mt-1 block w-full border rounded p-2" value="${q.knowledge || ''}" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">题型</label>
+                                <input id="edit-type" class="mt-1 block w-full border rounded p-2" value="${q.type || '选择题'}" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">来源</label>
+                                <input id="edit-source" class="mt-1 block w-full border rounded p-2" value="${q.source || ''}" />
+                            </div>
+                        </div>
+                        <div class="flex justify-end space-x-3">
+                            <button id="cancel-edit" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-5 py-2 rounded-lg">取消</button>
+                            <button id="save-edit" class="bg-primary hover:bg-blue-700 text-white px-6 py-2 rounded-lg">保存</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            showModalContent(modalContent);
+
+            document.getElementById('close-modal').addEventListener('click', closeModal);
+            document.getElementById('cancel-edit').addEventListener('click', closeModal);
+            document.getElementById('save-edit').addEventListener('click', () => {
+                const content = document.getElementById('edit-content').value;
+                const optionsRaw = document.getElementById('edit-options').value;
+                const correct = document.getElementById('edit-correct').value;
+                const my = document.getElementById('edit-my').value;
+                const analysis = document.getElementById('edit-analysis').value;
+                const knowledge = document.getElementById('edit-knowledge').value;
+                const type = document.getElementById('edit-type').value || '选择题';
+                const source = document.getElementById('edit-source').value;
+
+                function parseOptions(raw){
+                    if (!raw) return [];
+                    if (Array.isArray(raw)) return raw;
+                    let s = normalize(raw).replace(/\r?\n/g,'\n');
+                    const tokenRe = /(?:^|[\s\n\r])[\(（]?([A-F])[\)）]?[\.、．，,)）]?\s*/g;
+                    const marks = []; let m;
+                    while((m = tokenRe.exec(s))){ marks.push({ key:m[1], contentStart: tokenRe.lastIndex, index:m.index }); }
+                    if (marks.length >= 2){
+                        const out=[]; for(let i=0;i<marks.length;i++){ const cur=marks[i], next=marks[i+1]; const seg = s.slice(cur.contentStart, next?next.index:s.length).trim().replace(/^[\s:：-]+/,''); out.push({ key:cur.key.toUpperCase(), text: seg }); }
+                        return out;
+                    }
+                    const lines = s.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+                    if (lines.length){
+                        return lines.map((line,i)=>{ const mm = line.match(/^\(?([A-F])\)?[\.、．，\)]?\s*(.*)$/i); return mm?{ key:mm[1].toUpperCase(), text:mm[2] }:{ key:String.fromCharCode(65+i), text:line }; });
+                    }
+                    return [];
+                }
+                function normalizeAnswer(ans, opts){
+                    const a = normalize(ans);
+                    const m = a.match(/^\(?([A-F])\)?[\.、．，\)]?/i);
+                    if (m) return m[1].toUpperCase();
+                    const target = a.replace(/^[A-F][\.、．，\)]?\s*/i,'');
+                    const found = (opts||[]).find(o => normalize(o.text).toLowerCase() === target.toLowerCase());
+                    return found ? found.key.toUpperCase() : a.toUpperCase();
+                }
+
+                const parsedOpts = parseOptions(optionsRaw);
+                const newOptions = parsedOpts.length ? parsedOpts : optionsRaw;
+                const updated = {
+                    ...q,
+                    content: content,
+                    options: newOptions,
+                    correctAnswer: normalizeAnswer(correct, parsedOpts),
+                    myAnswer: my ? normalizeAnswer(my, parsedOpts) : q.myAnswer,
+                    analysis: analysis,
+                    knowledge: knowledge,
+                    type: type,
+                    source: source
+                };
+
+                const idx = questions.findIndex(x => x.id === questionId);
+                if (idx >= 0) questions[idx] = updated;
+                const eidx = errorQuestions.findIndex(x => x.id === questionId);
+                if (eidx >= 0) errorQuestions[eidx] = { ...errorQuestions[eidx], ...updated };
+
+                saveQuestions();
+                saveErrorQuestions();
+                updateQuestionTable();
+                updateErrorBook();
+                updateDashboard();
+                closeModal();
+            });
         }
 
         function deleteQuestion(questionId) {
@@ -1745,6 +2208,134 @@
             document.getElementById('modal').classList.add('flex');
         }
 
+        // 知识点筛选弹窗：支持单选/多选
+        function openKnowledgeFilterModal() {
+            const knowledgeSet = new Set((questions || []).map(q => (q.knowledge || '').trim()).filter(Boolean));
+            const knowledgeList = Array.from(knowledgeSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+            const hasKnowledge = knowledgeList.length > 0;
+
+            const optionsHtml = hasKnowledge
+                ? knowledgeList.map(k => `<option value="${k}">${k}</option>`).join('')
+                : '<option value="" disabled>无可用知识点</option>';
+
+            const checkboxesHtml = hasKnowledge
+                ? knowledgeList.map(k => `
+                    <label class="flex items-center space-x-2">
+                        <input type="checkbox" value="${k}" class="form-checkbox h-4 w-4 text-primary"/>
+                        <span class="text-sm text-gray-700">${k}</span>
+                    </label>
+                `).join('')
+                : '<div class="text-sm text-gray-500">当前题库中没有可用的知识点，请先导入或编辑题目。</div>';
+
+            const modalContent = `
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-lg font-bold text-gray-900">知识点筛选</h3>
+                        <button id="close-modal" class="text-gray-400 hover:text-gray-600"><i class="fa fa-times"></i></button>
+                    </div>
+
+                    <div class="text-sm text-gray-600">请选择进入练习前的知识点范围，支持单选或多选。</div>
+
+                    <div class="flex items-center space-x-6">
+                        <label class="flex items-center space-x-2">
+                            <input type="radio" name="k-mode" value="single" class="form-radio" checked />
+                            <span>单选</span>
+                        </label>
+                        <label class="flex items-center space-x-2">
+                            <input type="radio" name="k-mode" value="multi" class="form-radio" />
+                            <span>多选</span>
+                        </label>
+                    </div>
+
+                    <div id="k-single" class="space-y-2">
+                        <label class="block text-sm text-gray-700">选择一个知识点</label>
+                        <select id="knowledge-select-single" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary">
+                            ${optionsHtml}
+                        </select>
+                    </div>
+
+                    <div id="k-multi" class="space-y-2 hidden">
+                        <div class="flex items-center justify-between">
+                            <label class="block text-sm text-gray-700">选择多个知识点</label>
+                            <div class="space-x-2">
+                                <button id="k-select-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">全选</button>
+                                <button id="k-clear-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">清空</button>
+                            </div>
+                        </div>
+                        <div id="knowledge-checkbox-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto pr-2">
+                            ${checkboxesHtml}
+                        </div>
+                    </div>
+
+                    <div id="k-warning" class="hidden text-sm text-red-600">请至少选择一个知识点。</div>
+
+                    <div class="flex justify-end space-x-3 pt-2">
+                        <button id="cancel-modal" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg transition-colors">取消</button>
+                        <button id="k-confirm" class="bg-primary hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition-colors">开始练习</button>
+                    </div>
+                </div>
+            `;
+
+            showModalContent(modalContent);
+
+            const close = () => { closeModal(); };
+            document.getElementById('close-modal').addEventListener('click', close);
+            document.getElementById('cancel-modal').addEventListener('click', close);
+
+            const radios = Array.from(document.querySelectorAll('input[name="k-mode"]'));
+            const singleBox = document.getElementById('k-single');
+            const multiBox = document.getElementById('k-multi');
+            radios.forEach(r => {
+                r.addEventListener('change', () => {
+                    const mode = radios.find(x => x.checked)?.value || 'single';
+                    if (mode === 'single') {
+                        singleBox.classList.remove('hidden');
+                        multiBox.classList.add('hidden');
+                    } else {
+                        singleBox.classList.add('hidden');
+                        multiBox.classList.remove('hidden');
+                    }
+                });
+            });
+
+            const listEl = document.getElementById('knowledge-checkbox-list');
+            const selectAllBtn = document.getElementById('k-select-all');
+            const clearAllBtn = document.getElementById('k-clear-all');
+            if (selectAllBtn) selectAllBtn.addEventListener('click', () => {
+                listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+            });
+            if (clearAllBtn) clearAllBtn.addEventListener('click', () => {
+                listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            });
+
+            document.getElementById('k-confirm').addEventListener('click', () => {
+                if (!hasKnowledge) {
+                    const warn = document.getElementById('k-warning');
+                    warn.textContent = '当前题库中没有可用的知识点，请先导入或编辑题目。';
+                    warn.classList.remove('hidden');
+                    return;
+                }
+                const mode = radios.find(x => x.checked)?.value || 'single';
+                let selected = [];
+                if (mode === 'single') {
+                    const val = document.getElementById('knowledge-select-single').value;
+                    if (val) selected = [val];
+                } else {
+                    const checked = Array.from(listEl.querySelectorAll('input[type="checkbox"]:checked'));
+                    selected = checked.map(x => x.value);
+                }
+                if (!selected.length) {
+                    const warn = document.getElementById('k-warning');
+                    warn.textContent = '请至少选择一个知识点。';
+                    warn.classList.remove('hidden');
+                    return;
+                }
+                window.selectedKnowledgeFilter = selected;
+                closeModal();
+                startPractice('knowledge');
+            });
+        }
+
         function closeModal() {
             document.getElementById('modal').classList.add('hidden');
             document.getElementById('modal').classList.remove('flex');
@@ -1783,6 +2374,8 @@
             updateErrorBook();
             updateDashboard();
             updateStatistics();
+            populateFilterOptions();
+            applyQuestionTableFilters();
         }
 
         function loadSampleData() {
@@ -1842,37 +2435,62 @@
         });
 
         // 搜索功能
-        document.getElementById('search-questions').addEventListener('input', function() {
-            const searchTerm = this.value.toLowerCase();
-            const rows = document.querySelectorAll('#question-table-body tr');
-            
-            rows.forEach(row => {
-                const questionText = row.querySelector('td:first-child div').textContent.toLowerCase();
-                const knowledgeText = row.querySelector('td:nth-child(2) span').textContent.toLowerCase();
-                
-                if (questionText.includes(searchTerm) || knowledgeText.includes(searchTerm)) {
-                    row.classList.remove('hidden');
-                } else {
-                    row.classList.add('hidden');
-                }
+        function populateFilterOptions() {
+            const kSet = new Set();
+            const tSet = new Set();
+            const tagSet = new Set();
+            (questions || []).forEach(q => {
+                if (q.knowledge) kSet.add(q.knowledge);
+                if (q.type) tSet.add(q.type);
+                const tags = Array.isArray(q.errorTags) ? q.errorTags : String(q.tags || '').split(/[，,、\/\s]+/).filter(Boolean);
+                tags.forEach(t => tagSet.add(t));
             });
-        });
+            const kSel = document.getElementById('filter-knowledge');
+            const tSel = document.getElementById('filter-type');
+            const tagSel = document.getElementById('filter-error-tag');
+            if (kSel) {
+                const current = kSel.value;
+                kSel.innerHTML = '<option value="">按知识点筛选</option>' + Array.from(kSet).sort().map(k => `<option value="${k}">${k}</option>`).join('');
+                if ([...kSel.options].some(o => o.value === current)) kSel.value = current;
+            }
+            if (tSel) {
+                const current = tSel.value;
+                tSel.innerHTML = '<option value="">按题型筛选</option>' + Array.from(tSet).sort().map(k => `<option value="${k}">${k}</option>`).join('');
+                if ([...tSel.options].some(o => o.value === current)) tSel.value = current;
+            }
+            if (tagSel) {
+                const current = tagSel.value;
+                tagSel.innerHTML = '<option value="">按错因标签筛选</option>' + Array.from(tagSet).sort().map(k => `<option value="${k}">${k}</option>`).join('');
+                if ([...tagSel.options].some(o => o.value === current)) tagSel.value = current;
+            }
+        }
 
-        // 筛选功能
-        document.getElementById('filter-knowledge').addEventListener('change', function() {
-            const selectedKnowledge = this.value;
+        function applyQuestionTableFilters() {
+            const searchTerm = document.getElementById('search-questions').value.toLowerCase();
+            const fKnowledge = document.getElementById('filter-knowledge').value;
+            const fType = document.getElementById('filter-type').value;
+            const fTag = document.getElementById('filter-error-tag').value.toLowerCase();
             const rows = document.querySelectorAll('#question-table-body tr');
-            
             rows.forEach(row => {
-                const knowledgeText = row.querySelector('td:nth-child(2) span').textContent;
-                
-                if (selectedKnowledge === '' || knowledgeText === selectedKnowledge) {
-                    row.classList.remove('hidden');
-                } else {
-                    row.classList.add('hidden');
-                }
+                const text = row.querySelector('td:first-child div')?.textContent.toLowerCase() || '';
+                const k = row.getAttribute('data-knowledge') || '';
+                const t = row.getAttribute('data-type') || '';
+                const tags = row.getAttribute('data-tags') || '';
+                const er = row.getAttribute('data-errorreason') || '';
+                const cm = row.getAttribute('data-correctmethod') || '';
+                const matchSearch = !searchTerm || text.includes(searchTerm) || k.includes(searchTerm) || t.includes(searchTerm) || tags.includes(searchTerm) || er.includes(searchTerm) || cm.includes(searchTerm);
+                const matchK = !fKnowledge || k === fKnowledge.toLowerCase();
+                const matchT = !fType || t === fType.toLowerCase();
+                const matchTag = !fTag || tags.split(',').includes(fTag);
+                if (matchSearch && matchK && matchT && matchTag) row.classList.remove('hidden'); else row.classList.add('hidden');
             });
-        });
+        }
+
+        document.getElementById('search-questions').addEventListener('input', applyQuestionTableFilters);
+        document.getElementById('filter-knowledge').addEventListener('change', applyQuestionTableFilters);
+        document.getElementById('filter-type').addEventListener('change', applyQuestionTableFilters);
+        document.getElementById('filter-error-tag').addEventListener('change', applyQuestionTableFilters);
+
 
         // 点击模态框外部关闭
         document.getElementById('modal').addEventListener('click', function(e) {
@@ -1905,5 +2523,6 @@
             }
         });
     </script>
+    <script type="module" src="./assets/js/test/practice_auto.js"></script>
 </body>
 </html>
