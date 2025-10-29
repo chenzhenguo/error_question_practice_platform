@@ -174,6 +174,9 @@
                         <button id="start-practice-btn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg transition-colors">
                             <i class="fa fa-play-circle mr-2"></i>立即开始
                         </button>
+                        <button id="open-filter-panel" class="ml-3 bg-white border border-green-300 text-green-700 hover:bg-green-50 px-4 py-2 rounded-lg transition-colors">
+                            <i class="fa fa-filter mr-2"></i>筛选
+                        </button>
                     </div>
                 </div>
                 
@@ -216,8 +219,22 @@
                             <button id="export-questions" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
                                 <i class="fa fa-download mr-2"></i>导出
                             </button>
+                            <button id="clear-filters" class="bg-white hover:bg-gray-50 text-gray-800 px-4 py-2 rounded-lg transition-colors border border-gray-300">
+                                <i class="fa fa-eraser mr-2"></i>清空筛选
+                            </button>
+                            <button id="reset-and-sample" class="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg transition-colors border border-gray-300">
+                                <i class="fa fa-refresh mr-2"></i>重置并加载示例数据
+                            </button>
                         </div>
                     </div>
+                <div id="filter-empty-hint" class="mt-3 hidden bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-2 rounded-lg flex items-center justify-between">
+                    <div>
+                        <i class="fa fa-info-circle mr-2"></i>没有匹配的题目，可能是筛选条件过于严格。
+                    </div>
+                    <button id="hint-clear-filters" class="text-yellow-800 bg-yellow-100 hover:bg-yellow-200 px-3 py-1 rounded border border-yellow-300">
+                        <i class="fa fa-eraser mr-1"></i>清空筛选
+                    </button>
+                </div>
                 </div>
                 
                 <div class="overflow-x-auto">
@@ -256,6 +273,11 @@
             <div class="text-center mb-8">
                 <h2 class="text-3xl font-bold text-gray-900 mb-4">选择练习模式</h2>
                 <p class="text-gray-600">根据您的学习需求，选择合适的练习方式</p>
+                <div class="mt-4">
+                    <button id="open-filter-panel-2" class="inline-flex items-center bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg transition-colors">
+                        <i class="fa fa-filter mr-2"></i>筛选
+                    </button>
+                </div>
             </div>
             
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -366,6 +388,9 @@
                             <div class="text-sm text-gray-600">
                                 用时: <span id="practice-time" class="font-semibold text-primary">00:00</span>
                             </div>
+                            <button id="open-filter-panel-3" class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg transition-colors">
+                                <i class="fa fa-filter mr-2"></i>筛选
+                            </button>
                             <button id="end-practice" class="bg-danger hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors">
                                 <i class="fa fa-stop mr-2"></i>结束练习
                             </button>
@@ -775,6 +800,28 @@
             
             // 加载保存的数据
             loadSavedData();
+
+            // 监听存储层更新事件（来自模块或其他页面），实现实时刷新
+            const refreshAfterDataChange = (() => {
+                let timer;
+                return function() {
+                    clearTimeout(timer);
+                    timer = setTimeout(() => {
+                        try { loadSavedData(); } catch(e) { console.warn('[loadSavedData] failed', e); }
+                    }, 50);
+                };
+            })();
+            try {
+                window.addEventListener('legacy:questions:updated', refreshAfterDataChange);
+                window.addEventListener('legacy:errorQuestions:updated', refreshAfterDataChange);
+                window.addEventListener('legacy:studyData:updated', refreshAfterDataChange);
+                window.addEventListener('eqpp:questions:updated', refreshAfterDataChange);
+                window.addEventListener('eqpp:errorQuestions:updated', refreshAfterDataChange);
+                window.addEventListener('storage', (e) => {
+                    const keys = ['questions','eqpp.questions','errorQuestions','studyData'];
+                    if (e && keys.includes(e.key)) refreshAfterDataChange();
+                });
+            } catch (_) { }
         }
 
         function setupNavigation() {
@@ -820,6 +867,14 @@
 
             // 更新导航状态
             updateNavigation(sectionId);
+            // 切换面板时，及时刷新当前视图的数据
+            try {
+                if (sectionId === 'dashboard') { updateDashboard(); updateStatistics(); }
+                else if (sectionId === 'question-bank') { updateQuestionTable(); }
+                else if (sectionId === 'error-book') { updateErrorBook(); }
+                else if (sectionId === 'statistics') { updateStatistics(); }
+                else if (sectionId === 'practice-result') { try { updateStatistics(); updateDashboard(); } catch(_){} }
+            } catch (e) { console.warn('[refresh-on-switch] failed', e); }
         }
 
         function updateNavigation(activeSection) {
@@ -1126,6 +1181,33 @@
                 showSection('practice');
             });
 
+            const openFilterBtn = document.getElementById('open-filter-panel');
+            if (openFilterBtn) {
+                openFilterBtn.addEventListener('click', function(){
+                    if (typeof openUnifiedFilterPanel === 'function') {
+                        openUnifiedFilterPanel();
+                    }
+                });
+            }
+
+            const openFilterBtn2 = document.getElementById('open-filter-panel-2');
+            if (openFilterBtn2) {
+                openFilterBtn2.addEventListener('click', function(){
+                    if (typeof openUnifiedFilterPanel === 'function') {
+                        openUnifiedFilterPanel();
+                    }
+                });
+            }
+
+            const openFilterBtn3 = document.getElementById('open-filter-panel-3');
+            if (openFilterBtn3) {
+                openFilterBtn3.addEventListener('click', function(){
+                    if (typeof openUnifiedFilterPanel === 'function') {
+                        openUnifiedFilterPanel();
+                    }
+                });
+            }
+
             practiceModeCards.forEach(card => {
                 card.addEventListener('click', function() {
                     const mode = this.dataset.mode;
@@ -1179,6 +1261,8 @@
 
         // 全局知识点筛选缓存
         window.selectedKnowledgeFilter = [];
+        // 小开关：进入模式时自动应用最近一次规则（默认开启，可按需扩展为设置项）
+        window.featureAutoApplyLastRules = true;
 
         function startPractice(mode) {
             if (questions.length === 0 && mode !== 'error') {
@@ -1195,6 +1279,33 @@
             currentQuestionIndex = 0;
             practiceStartTime = Date.now();
             practiceAnswers = [];
+
+            // 小开关：进入模式时自动应用最近一次规则
+            if (window.featureAutoApplyLastRules) {
+                try {
+                    const cacheRaw = localStorage.getItem(`practiceFilter:${mode}`);
+                    if (cacheRaw) {
+                        const cache = JSON.parse(cacheRaw) || {};
+                        const { rules = {} } = cache;
+                        const { knowledge = [], tableFilters = {} } = rules;
+                        // 知识点模式：若当前未选择或为空，则恢复最近一次选择
+                        if (mode === 'knowledge' && (!Array.isArray(window.selectedKnowledgeFilter) || window.selectedKnowledgeFilter.length === 0)) {
+                            if (Array.isArray(knowledge) && knowledge.length > 0) {
+                                window.selectedKnowledgeFilter = knowledge.slice();
+                                console.log('[FilterStats]', { mode, autoAppliedKnowledge: window.selectedKnowledgeFilter });
+                            }
+                        }
+                        // 表格筛选：恢复下拉并应用
+                        const kSel = document.getElementById('filter-knowledge');
+                        const tSel = document.getElementById('filter-type');
+                        const tagSel = document.getElementById('filter-error-tag');
+                        if (kSel && typeof tableFilters.knowledge === 'string') kSel.value = tableFilters.knowledge;
+                        if (tSel && typeof tableFilters.type === 'string') tSel.value = tableFilters.type;
+                        if (tagSel && typeof tableFilters.tag === 'string') tagSel.value = tableFilters.tag;
+                        if (typeof applyQuestionTableFilters === 'function') applyQuestionTableFilters();
+                    }
+                } catch (_) {}
+            }
 
             // 根据模式筛选题目
             let practiceQuestions = [];
@@ -1229,6 +1340,52 @@
                     practiceQuestions = [...questions].sort(() => Math.random() - 0.5);
                     break;
             }
+
+            // 二期2.1：应用高级筛选规则（题型/错因标签 + AND/OR + 时间范围）
+            try {
+                const adv = (window.FilterCore && window.FilterCore.getAdvancedRulesForMode) ? window.FilterCore.getAdvancedRulesForMode(mode) : {};
+                if (adv && (
+                    (Array.isArray(adv.types) && adv.types.length) ||
+                    (Array.isArray(adv.tags) && adv.tags.length) ||
+                    (Array.isArray(adv.knowledge) && adv.knowledge.length) ||
+                    (adv.timeRange && (adv.timeRange.preset || adv.timeRange.from || adv.timeRange.to))
+                )) {
+                    practiceQuestions = (window.FilterCore && window.FilterCore.filterQuestions)
+                        ? window.FilterCore.filterQuestions(practiceQuestions, adv, window.studyData)
+                        : practiceQuestions;
+                }
+            } catch(_) {}
+
+            // 应用答题数量限制（如设置）
+            try {
+                const adv2 = (window.FilterCore && window.FilterCore.getAdvancedRulesForMode) ? window.FilterCore.getAdvancedRulesForMode(mode) : {};
+                const cnt = parseInt(adv2?.questionCount||0) || 0;
+                if (cnt > 0) practiceQuestions = practiceQuestions.slice(0, cnt);
+            } catch(_) {}
+
+            // 一期：统一筛选统计日志 + 规则快照（按模式）→ 同步包含高级筛选快照
+            try {
+                const tableFilters = {
+                    knowledge: document.getElementById('filter-knowledge')?.value || '',
+                    type: document.getElementById('filter-type')?.value || '',
+                    tag: document.getElementById('filter-error-tag')?.value || ''
+                };
+                const adv = (window.FilterCore && window.FilterCore.getAdvancedRulesForMode) ? window.FilterCore.getAdvancedRulesForMode(mode) : {};
+                const rules = {
+                    mode,
+                    knowledge: Array.isArray(window.selectedKnowledgeFilter) ? window.selectedKnowledgeFilter.slice() : [],
+                    tableFilters,
+                    // 高级筛选（2.1）
+                    types: Array.isArray(adv.types) ? adv.types : [],
+                    tags: Array.isArray(adv.tags) ? adv.tags : [],
+                    tagLogic: (adv.tagLogic==='AND'||adv.tagLogic==='OR') ? adv.tagLogic : 'OR',
+                    // 2.2 扩展：时间筛选 + 每次答题数量
+                    timeRange: adv.timeRange || { preset: 'any' },
+                    questionCount: parseInt(adv.questionCount||0)||0
+                };
+                console.log('[FilterStats]', { mode, rules, matchedCount: practiceQuestions.length });
+                try { localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules, ts: new Date().toISOString() })); } catch(_) {}
+            } catch(_) {}
 
             if (practiceQuestions.length === 0) {
                 const tip = (Array.isArray(window.selectedKnowledgeFilter) && window.selectedKnowledgeFilter.length > 0)
@@ -1690,6 +1847,8 @@
                 row.setAttribute('data-tags', errorTags.map(t => String(t).toLowerCase()).join(','));
                 row.setAttribute('data-errorreason', eReason.toLowerCase());
                 row.setAttribute('data-correctmethod', cMethod.toLowerCase());
+                // 用于时间筛选（若无记录则留空）
+                row.setAttribute('data-last-error-time', String(question.lastErrorTime || ''));
 
                 row.innerHTML = `
                     <td class="px-6 py-4">
@@ -2154,6 +2313,7 @@
                 updateErrorBook();
                 updateDashboard();
                 closeModal();
+                try { if (typeof applyQuestionTableFilters === 'function') applyQuestionTableFilters(); } catch(_) {}
             });
         }
 
@@ -2238,18 +2398,18 @@
 
                     <div class="flex items-center space-x-6">
                         <label class="flex items-center space-x-2">
-                            <input type="radio" name="k-mode" value="single" class="form-radio" checked />
+                            <input type="radio" name="k-mode" value="single" class="form-radio" checked data-testid="k-mode-single" />
                             <span>单选</span>
                         </label>
                         <label class="flex items-center space-x-2">
-                            <input type="radio" name="k-mode" value="multi" class="form-radio" />
+                            <input type="radio" name="k-mode" value="multi" class="form-radio" data-testid="k-mode-multi" />
                             <span>多选</span>
                         </label>
                     </div>
 
                     <div id="k-single" class="space-y-2">
                         <label class="block text-sm text-gray-700">选择一个知识点</label>
-                        <select id="knowledge-select-single" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary">
+                        <select id="knowledge-select-single" data-testid="knowledge-select-single" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary">
                             ${optionsHtml}
                         </select>
                     </div>
@@ -2258,11 +2418,11 @@
                         <div class="flex items-center justify-between">
                             <label class="block text-sm text-gray-700">选择多个知识点</label>
                             <div class="space-x-2">
-                                <button id="k-select-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">全选</button>
-                                <button id="k-clear-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">清空</button>
+                                <button id="k-select-all" data-testid="k-select-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">全选</button>
+                                <button id="k-clear-all" data-testid="k-clear-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">清空</button>
                             </div>
                         </div>
-                        <div id="knowledge-checkbox-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto pr-2">
+                        <div id="knowledge-checkbox-list" data-testid="knowledge-checkbox-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-auto pr-2">
                             ${checkboxesHtml}
                         </div>
                     </div>
@@ -2271,7 +2431,7 @@
 
                     <div class="flex justify-end space-x-3 pt-2">
                         <button id="cancel-modal" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg transition-colors">取消</button>
-                        <button id="k-confirm" class="bg-primary hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition-colors">开始练习</button>
+                        <button id="k-confirm" data-testid="k-confirm" class="bg-primary hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition-colors">开始练习</button>
                     </div>
                 </div>
             `;
@@ -2331,26 +2491,272 @@
                     return;
                 }
                 window.selectedKnowledgeFilter = selected;
+                try { localStorage.setItem('practiceFilter:knowledge', JSON.stringify({ rules: { knowledge: selected }, ts: new Date().toISOString() })); } catch(_) {}
                 closeModal();
                 startPractice('knowledge');
+            });
+        }
+
+        // 统一筛选面板（2.1）：题型 / 错因标签 + AND/OR 逻辑，按模式保存
+        function openUnifiedFilterPanel(){
+            const allTypes = Array.from(new Set((questions||[]).map(q=>q.type).filter(Boolean))).sort((a,b)=>String(a).localeCompare(String(b),'zh-Hans-CN'));
+            const allTags = Array.from(new Set((questions||[]).flatMap(q=> (Array.isArray(q.errorTags)? q.errorTags : String(q.tags||'').split(/[，,、\/\s]+/).filter(Boolean))).filter(Boolean))).sort((a,b)=>String(a).localeCompare(String(b),'zh-Hans-CN'));
+            const modes = ['normal','random','error','simulation','chapter','knowledge','memorize'];
+            const cur = window.currentPracticeMode || 'normal';
+            const modeLabels = { normal: '顺序', random: '随机', error: '错题', simulation: '模拟', chapter: '章节', knowledge: '知识点', memorize: '背题' };
+            const modeOptions = modes.map(m=>`<option value="${m}" ${m===cur?'selected':''}>${modeLabels[m] || m}</option>`).join('');
+
+            const getRule = (mode)=>{
+                try{ const raw = localStorage.getItem(`practiceFilter:${mode}`); if(!raw) return {}; const obj = JSON.parse(raw)||{}; return obj.rules||{}; }catch(_){ return {}; }
+            };
+            const rules = getRule(cur);
+            const rTypes = Array.isArray(rules.types) ? rules.types : [];
+            const rTags = Array.isArray(rules.tags) ? rules.tags : [];
+            const rTagLogic = (rules.tagLogic==='AND'||rules.tagLogic==='OR')? rules.tagLogic : 'OR';
+            const rCount = Number.isFinite(+rules.questionCount) ? parseInt(rules.questionCount) : '';
+            const rTime = (rules.timeRange && typeof rules.timeRange==='object') ? rules.timeRange : { preset: 'any' };
+
+            const chip = 'inline-block rounded-full border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer transition peer-checked:bg-primary peer-checked:text-white peer-checked:border-primary';
+            const typesHtml = allTypes.length ? allTypes.map(t=>`<label class="select-none"><input type="checkbox" value="${t}" class="peer sr-only" ${rTypes.includes(t)?'checked':''}/><span class="${chip}">${t}</span></label>`).join('') : '<div class="text-sm text-gray-500">暂无题型数据</div>';
+            const tagsHtml = allTags.length ? allTags.map(t=>`<label class="select-none"><input type="checkbox" value="${t}" class="peer sr-only" ${rTags.includes(t)?'checked':''}/><span class="${chip}">${t}</span></label>`).join('') : '<div class="text-sm text-gray-500">暂无错因标签数据</div>';
+
+            const modalContent = `
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-lg font-bold text-gray-900">统一筛选（题型/错因标签）</h3>
+                        <button id="close-modal" class="text-gray-400 hover:text-gray-600"><i class="fa fa-times"></i></button>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4">
+                        <div class="space-y-2">
+                            <label class="block text-sm text-gray-700">目标模式</label>
+                            <select id="ufp-mode" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary">
+                                ${modeOptions}
+                            </select>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="block text-sm text-gray-700">错因标签逻辑</label>
+                            <div class="flex items-center flex-wrap gap-4">
+                                <label class="flex items-center space-x-2"><input type="radio" name="ufp-tag-logic" value="OR" class="form-radio" ${rTagLogic==='OR'?'checked':''}/><span>包含任一（OR）</span></label>
+                                <label class="flex items-center space-x-2"><input type="radio" name="ufp-tag-logic" value="AND" class="form-radio" ${rTagLogic==='AND'?'checked':''}/><span>全部包含（AND）</span></label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div class="space-y-2">
+                            <label class="block text-sm text-gray-700">每次答题数量</label>
+                            <input id="ufp-count" type="number" min="1" step="1" value="${rCount||''}" placeholder="留空或0表示不限制"
+                                   class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"/>
+                            <div class="text-xs text-gray-500">提示：仅影响本模式开始练习时抽取的题目数量，不改变题库内容</div>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="block text-sm text-gray-700">时间筛选</label>
+                            <div class="flex items-center flex-wrap gap-2">
+                                <label class="select-none"><input type="radio" name="ufp-time-preset" value="any" class="peer sr-only" ${(rTime.preset||'any')==='any'?'checked':''}/><span class="${chip}">不限</span></label>
+                                <label class="select-none"><input type="radio" name="ufp-time-preset" value="7d" class="peer sr-only" ${rTime.preset==='7d'?'checked':''}/><span class="${chip}">近7天</span></label>
+                                <label class="select-none"><input type="radio" name="ufp-time-preset" value="30d" class="peer sr-only" ${rTime.preset==='30d'?'checked':''}/><span class="${chip}">近30天</span></label>
+                                <label class="select-none"><input type="radio" name="ufp-time-preset" value="custom" class="peer sr-only" ${rTime.preset==='custom'?'checked':''}/><span class="${chip}">自定义</span></label>
+                            </div>
+                            <div id="ufp-time-custom" class="${rTime.preset==='custom'?'':'hidden'} flex items-center gap-2">
+                                <input id="ufp-date-from" type="date" value="${rTime.from||''}" class="border rounded-lg px-2 py-1"/>
+                                <span class="text-gray-500">至</span>
+                                <input id="ufp-date-to" type="date" value="${rTime.to||''}" class="border rounded-lg px-2 py-1"/>
+                            </div>
+                            <div class="text-xs text-gray-500">依据“最后错题时间”进行筛选；无时间记录的题目在开启时间筛选时将被排除</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-6">
+                        <div>
+                            <div class="flex items-center justify-between gap-2 mb-2">
+                                <label class="block text-sm text-gray-700">题型</label>
+                                <div class="flex items-center gap-2">
+                                    <input id="ufp-types-search" type="text" placeholder="搜索题型" class="border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+                                    <button id="ufp-types-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">全选</button>
+                                    <button id="ufp-types-clear" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">清空</button>
+                                </div>
+                            </div>
+                            <div id="ufp-types-list" class="flex flex-wrap gap-2 max-h-64 overflow-auto pr-1">${typesHtml}</div>
+                            <div id="ufp-types-summary" class="text-xs text-gray-500 mt-1">已选 0 / 共 0</div>
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between gap-2 mb-2">
+                                <label class="block text-sm text-gray-700">错因标签</label>
+                                <div class="flex items-center gap-2">
+                                    <input id="ufp-tags-search" type="text" placeholder="搜索标签" class="border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+                                    <button id="ufp-tags-all" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">全选</button>
+                                    <button id="ufp-tags-clear" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">清空</button>
+                                </div>
+                            </div>
+                            <div id="ufp-tags-list" class="flex flex-wrap gap-2 max-h-64 overflow-auto pr-1">${tagsHtml}</div>
+                            <div id="ufp-tags-summary" class="text-xs text-gray-500 mt-1">已选 0 / 共 0</div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end space-x-3 pt-2">
+                        <button id="ufp-cancel" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg transition-colors">取消</button>
+                        <button id="ufp-apply" class="bg-primary hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition-colors">应用并保存</button>
+                    </div>
+                </div>
+            `;
+
+            showModalContent(modalContent);
+            // 放大当前弹窗宽度以适配筛选布局
+            (function widenModal(){
+                const modalBox = document.querySelector('#modal > div');
+                if(modalBox){ modalBox.className = 'bg-white rounded-xl p-6 max-w-5xl w-[96vw] md:w-[80vw] mx-4 card-shadow'; }
+            })();
+
+            const $ = (sel)=>document.querySelector(sel);
+            const $$ = (sel)=>Array.from(document.querySelectorAll(sel));
+
+            // 时间筛选：自定义日期框显隐切换
+            (function bindTimePresetToggle(){
+                const toggle = ()=>{
+                    const val = (document.querySelector("input[name='ufp-time-preset']:checked")||{}).value || 'any';
+                    const box = document.getElementById('ufp-time-custom');
+                    if (box) box.classList.toggle('hidden', val !== 'custom');
+                };
+                $$("input[name='ufp-time-preset']").forEach(r=> r.addEventListener('change', toggle));
+                toggle();
+            })();
+
+            const bindToggle = (allBtnId, clearBtnId, listSel)=>{
+                const allBtn = document.getElementById(allBtnId);
+                const clearBtn = document.getElementById(clearBtnId);
+                const listEl = document.querySelector(listSel);
+                if (allBtn && listEl) allBtn.addEventListener('click', ()=>{ listEl.querySelectorAll('input[type=\"checkbox\"]').forEach(cb=>cb.checked=true); updateSummary(listSel); });
+                if (clearBtn && listEl) clearBtn.addEventListener('click', ()=>{ listEl.querySelectorAll('input[type=\"checkbox\"]').forEach(cb=>cb.checked=false); updateSummary(listSel); });
+            };
+            bindToggle('ufp-types-all','ufp-types-clear','#ufp-types-list');
+            bindToggle('ufp-tags-all','ufp-tags-clear','#ufp-tags-list');
+
+            // 搜索过滤
+            const filterList = (listSel, q)=>{
+                const listEl = document.querySelector(listSel);
+                if(!listEl) return;
+                const kw = String(q||'').trim().toLowerCase();
+                Array.from(listEl.querySelectorAll('label')).forEach(lbl=>{
+                    const text = lbl.textContent.trim().toLowerCase();
+                    lbl.classList.toggle('hidden', !!kw && !text.includes(kw));
+                });
+            };
+            const tSearch = $('#ufp-types-search');
+            const gSearch = $('#ufp-tags-search');
+            if(tSearch) tSearch.addEventListener('input', ()=>filterList('#ufp-types-list', tSearch.value));
+            if(gSearch) gSearch.addEventListener('input', ()=>filterList('#ufp-tags-list', gSearch.value));
+
+            // 计数摘要
+            const updateSummary = (listSel)=>{
+                const listEl = document.querySelector(listSel);
+                if(!listEl) return;
+                const all = listEl.querySelectorAll('input[type=\"checkbox\"]').length;
+                const sel = listEl.querySelectorAll('input[type=\"checkbox\"]:checked').length;
+                const sumId = listSel==='#ufp-types-list' ? '#ufp-types-summary' : '#ufp-tags-summary';
+                const el = document.querySelector(sumId);
+                if(el) el.textContent = `已选 ${sel} / 共 ${all}`;
+            };
+            updateSummary('#ufp-types-list');
+            updateSummary('#ufp-tags-list');
+            $('#ufp-types-list')?.addEventListener('change', ()=>updateSummary('#ufp-types-list'));
+            $('#ufp-tags-list')?.addEventListener('change', ()=>updateSummary('#ufp-tags-list'));
+
+            $('#close-modal').addEventListener('click', closeModal);
+            $('#ufp-cancel').addEventListener('click', closeModal);
+
+            $('#ufp-apply').addEventListener('click', ()=>{
+                const modeSel = $('#ufp-mode');
+                const mode = modeSel ? modeSel.value : (window.currentPracticeMode||'normal');
+                const types = $$('#ufp-types-list input[type=\"checkbox\"]:checked').map(x=>x.value);
+                const tags = $$('#ufp-tags-list input[type=\"checkbox\"]:checked').map(x=>x.value);
+                const tagLogic = ($('input[name=\"ufp-tag-logic\"]:checked')?.value) || 'OR';
+                // 额外：答题数量与时间筛选
+                const countVal = parseInt($('#ufp-count')?.value||'')||0;
+                const timePreset = (document.querySelector("input[name='ufp-time-preset']:checked")||{}).value || 'any';
+                const timeRange = timePreset==='custom' ? {
+                    preset: 'custom',
+                    from: $('#ufp-date-from')?.value || '',
+                    to: $('#ufp-date-to')?.value || ''
+                } : { preset: timePreset };
+                const patch = { types, tags, tagLogic, questionCount: countVal, timeRange };
+                if (window.FilterCore && window.FilterCore.saveRulesForMode) {
+                    const saved = window.FilterCore.saveRulesForMode(mode, patch);
+                    console.log('[FilterStats]', { mode, rules: Object.assign({}, saved), from: 'UnifiedFilterPanel.Save' });
+                } else {
+                    try {
+                        const raw = localStorage.getItem(`practiceFilter:${mode}`);
+                        const obj = raw? (JSON.parse(raw)||{}) : {};
+                        const rules = Object.assign({}, obj.rules||{}, patch);
+                        localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules, ts: new Date().toISOString() }));
+                    } catch(_){ }
+                }
+                closeModal();
             });
         }
 
         function closeModal() {
             document.getElementById('modal').classList.add('hidden');
             document.getElementById('modal').classList.remove('flex');
+            // 统一还原为默认小尺寸，避免其他弹窗受影响
+            const box = document.querySelector('#modal > div');
+            if (box) box.className = 'bg-white rounded-xl p-8 max-w-md w-full mx-4 card-shadow';
         }
 
         function saveQuestions() {
             localStorage.setItem('questions', JSON.stringify(questions));
+            // 同步到模块化存储 eqpp.questions，保证导出/批量等模块实时可见
+            try {
+                const mapped = (questions||[]).map(q=>({
+                    id: q.id || ('Q' + Date.now().toString(36) + Math.random().toString(36).slice(2,7)),
+                    question: q.content || q.question || '',
+                    answer: q.correctAnswer || q.answer || '',
+                    type: q.type || '',
+                    difficulty: q.difficulty || '',
+                    score: q.score || '',
+                    knowledge: q.knowledge || '',
+                    analysis: q.analysis || '',
+                    note: q.correctMethod || q.errorReason || q.note || '',
+                    tags: Array.isArray(q.errorTags) ? q.errorTags.join(',') : (String(q.tags||'').split(/[，,、\/\s]+/).filter(Boolean).join(',')),
+                    source: q.source || '',
+                    createdAt: q.date ? (String(q.date).includes('T') ? q.date : (q.date + 'T00:00:00')) : (q.lastErrorTime || new Date().toISOString()),
+                }));
+                localStorage.setItem('eqpp.questions', JSON.stringify(mapped));
+                // 通知模块侧有来自 legacy 的更新
+                window.dispatchEvent(new CustomEvent('eqpp:questions:updated', { detail: { origin: 'legacy', count: mapped.length } }));
+            } catch(_){}
         }
 
         function saveErrorQuestions() {
             localStorage.setItem('errorQuestions', JSON.stringify(errorQuestions));
+            // 同步到模块化存储 eqpp.errorQuestions，保证导出/批量等模块实时可见
+            try {
+                const mapped = (errorQuestions||[]).map(q=>({
+                    id: q.id || ('Q' + Date.now().toString(36) + Math.random().toString(36).slice(2,7)),
+                    question: q.content || q.question || '',
+                    answer: q.correctAnswer || q.answer || '',
+                    type: q.type || '',
+                    knowledge: q.knowledge || '',
+                    analysis: q.analysis || '',
+                    note: q.correctMethod || q.errorReason || q.note || '',
+                    tags: Array.isArray(q.errorTags) ? q.errorTags.join(',') : (String(q.tags||'').split(/[，,、\/\s]+/).filter(Boolean).join(',')),
+                    source: q.source || '',
+                    errorCount: Number(q.errorCount || 0),
+                    lastErrorTime: q.lastErrorTime || new Date().toISOString(),
+                    createdAt: q.date ? (String(q.date).includes('T') ? q.date : (q.date + 'T00:00:00')) : (q.lastErrorTime || new Date().toISOString()),
+                }));
+                localStorage.setItem('eqpp.errorQuestions', JSON.stringify(mapped));
+                // 通知模块侧有来自 legacy 的更新
+                window.dispatchEvent(new CustomEvent('eqpp:errorQuestions:updated', { detail: { origin: 'legacy', count: mapped.length } }));
+            } catch(_){}
+            // 通知有错题数据更新，便于其他视图/模块及时刷新
+            try { window.dispatchEvent(new CustomEvent('legacy:errorQuestions:updated', { detail: { count: (errorQuestions||[]).length } })); } catch(_){ }
         }
 
         function saveStudyData() {
             localStorage.setItem('studyData', JSON.stringify(studyData));
+            // 通知学习数据更新，仪表盘/统计面板可实时刷新
+            try { window.dispatchEvent(new CustomEvent('legacy:studyData:updated', { detail: { } })); } catch(_){ }
         }
 
         function loadSavedData() {
@@ -2375,6 +2781,28 @@
             updateDashboard();
             updateStatistics();
             populateFilterOptions();
+            try {
+                const mode = window.currentPracticeMode || 'normal';
+                let obj = null;
+                const raw = localStorage.getItem(`practiceFilter:${mode}`);
+                if (raw) obj = JSON.parse(raw) || {};
+                if (!obj || !obj.rules) {
+                    let latest = null; let latestTs = 0;
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && k.startsWith('practiceFilter:')) {
+                            try { const o = JSON.parse(localStorage.getItem(k) || '{}'); const ts = Date.parse(o.ts || '') || 0; if (ts > latestTs) { latestTs = ts; latest = o; } } catch(_){}
+                        }
+                    }
+                    obj = latest || {};
+                }
+                const tf = (obj && obj.rules && obj.rules.tableFilters) ? obj.rules.tableFilters : {};
+                if (tf) {
+                    if (tf.knowledge && document.getElementById('filter-knowledge')) document.getElementById('filter-knowledge').value = tf.knowledge;
+                    if (tf.type && document.getElementById('filter-type')) document.getElementById('filter-type').value = tf.type;
+                    if (tf.tag !== undefined && document.getElementById('filter-error-tag')) document.getElementById('filter-error-tag').value = tf.tag;
+                }
+            } catch(_) {}
             applyQuestionTableFilters();
         }
 
@@ -2411,27 +2839,55 @@
             }
         }
 
-        // 导出功能
-        document.getElementById('export-questions').addEventListener('click', function() {
-            if (questions.length === 0) {
-                showModal('提示', '题库为空，无法导出');
-                return;
-            }
-            
-            const worksheet = XLSX.utils.json_to_sheet(questions);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, '题目数据');
-            
-            const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-            const dataBlob = new Blob([excelBuffer], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(dataBlob);
-            
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `题库数据_${new Date().toISOString().split('T')[0]}.xlsx`;
-            link.click();
-            
-            URL.revokeObjectURL(url);
+        // 导出功能由模块化脚本实现（assets/js/export/exporter.js -> attachExport），此处不再重复绑定，避免冲突。
+
+        // 一键重置并加载示例数据
+        document.getElementById('reset-and-sample').addEventListener('click', function(){
+            const ok = confirm('将清空本地题库与统计数据，并加载示例题。是否继续？');
+            if (!ok) return;
+            try {
+                localStorage.removeItem('questions');
+                localStorage.removeItem('errorQuestions');
+                localStorage.removeItem('studyData');
+                // 同步清理模块化存储
+                localStorage.removeItem('eqpp.questions');
+                localStorage.removeItem('eqpp.batches');
+                // 清除按模式保存的筛选规则，避免影响可见性
+                const keys = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('practiceFilter:')) keys.push(k);
+                }
+                keys.forEach(k => localStorage.removeItem(k));
+            } catch(_) {}
+            // 重置内存变量
+            questions = [];
+            errorQuestions = [];
+            studyData = {};
+            // 重新加载示例并刷新界面
+            loadSampleData();
+            loadSavedData();
+            // 将示例数据同步到模块化题库(eqpp.questions)，以便导出等功能可用
+            try {
+                const legacy = JSON.parse(localStorage.getItem('questions')||'[]')||[];
+                const mapped = legacy.map(q=>({
+                    question: q.content || q.question || '',
+                    answer: q.correctAnswer || q.answer || '',
+                    type: q.type || '',
+                    difficulty: q.difficulty || '',
+                    score: q.score || '',
+                    knowledge: q.knowledge || '',
+                    analysis: q.analysis || '',
+                    note: q.correctMethod || q.errorReason || q.note || '',
+                    tags: Array.isArray(q.errorTags) ? q.errorTags.join(',') : (String(q.tags||'').split(/[，,、\/\s]+/).filter(Boolean).join(',')),
+                    source: q.source || '',
+                    createdAt: q.date ? (String(q.date).includes('T') ? q.date : (q.date + 'T00:00:00')) : (q.lastErrorTime || new Date().toISOString()),
+                }));
+                localStorage.setItem('eqpp.questions', JSON.stringify(mapped));
+            } catch(_){ }
+            populateFilterOptions();
+            applyQuestionTableFilters();
+            showModal('提示', '已重置并加载示例数据。您可以继续完整测试。');
         });
 
         // 搜索功能
@@ -2448,6 +2904,9 @@
             const kSel = document.getElementById('filter-knowledge');
             const tSel = document.getElementById('filter-type');
             const tagSel = document.getElementById('filter-error-tag');
+            if (kSel) kSel.setAttribute('data-testid', 'filter-knowledge');
+            if (tSel) tSel.setAttribute('data-testid', 'filter-type');
+            if (tagSel) tagSel.setAttribute('data-testid', 'filter-error-tag');
             if (kSel) {
                 const current = kSel.value;
                 kSel.innerHTML = '<option value="">按知识点筛选</option>' + Array.from(kSet).sort().map(k => `<option value="${k}">${k}</option>`).join('');
@@ -2470,6 +2929,44 @@
             const fKnowledge = document.getElementById('filter-knowledge').value;
             const fType = document.getElementById('filter-type').value;
             const fTag = document.getElementById('filter-error-tag').value.toLowerCase();
+
+            // 读取当前模式或最近一次保存的高级筛选规则
+            let adv = {};
+            try {
+                const mode = window.currentPracticeMode || 'normal';
+                let obj = null;
+                const raw = localStorage.getItem(`practiceFilter:${mode}`);
+                if (raw) obj = JSON.parse(raw) || {};
+                if (!obj || !obj.rules) {
+                    // 回落到最近一次保存的规则
+                    let latest = null; let latestTs = 0;
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && k.startsWith('practiceFilter:')) {
+                            try {
+                                const o = JSON.parse(localStorage.getItem(k) || '{}');
+                                const ts = Date.parse(o.ts || '') || 0;
+                                if (ts > latestTs) { latestTs = ts; latest = o; }
+                            } catch (_) {}
+                        }
+                    }
+                    obj = latest || {};
+                }
+                adv = obj.rules || {};
+                // 将当前下拉筛选状态也写回到当前模式，便于进入列表时恢复
+                try {
+                    const tableFilters = { knowledge: fKnowledge || '', type: fType || '', tag: document.getElementById('filter-error-tag').value || '' };
+                    const merged = Object.assign({}, obj, { rules: Object.assign({}, adv, { tableFilters }), ts: new Date().toISOString() });
+                    localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify(merged));
+                } catch (_) {}
+            } catch (_) {}
+
+            const advTypes = Array.isArray(adv.types) ? adv.types.map(x => String(x).toLowerCase()) : [];
+            const advTags = Array.isArray(adv.tags) ? adv.tags.map(x => String(x).toLowerCase()) : [];
+            const advTagLogic = (adv.tagLogic === 'AND' || adv.tagLogic === 'OR') ? adv.tagLogic : 'OR';
+            const advKnowledge = Array.isArray(adv.knowledge) ? adv.knowledge.map(x => String(x).toLowerCase()) : [];
+            const advTime = adv.timeRange;
+
             const rows = document.querySelectorAll('#question-table-body tr');
             rows.forEach(row => {
                 const text = row.querySelector('td:first-child div')?.textContent.toLowerCase() || '';
@@ -2478,18 +2975,89 @@
                 const tags = row.getAttribute('data-tags') || '';
                 const er = row.getAttribute('data-errorreason') || '';
                 const cm = row.getAttribute('data-correctmethod') || '';
+
+                // 基础筛选
                 const matchSearch = !searchTerm || text.includes(searchTerm) || k.includes(searchTerm) || t.includes(searchTerm) || tags.includes(searchTerm) || er.includes(searchTerm) || cm.includes(searchTerm);
                 const matchK = !fKnowledge || k === fKnowledge.toLowerCase();
                 const matchT = !fType || t === fType.toLowerCase();
                 const matchTag = !fTag || tags.split(',').includes(fTag);
-                if (matchSearch && matchK && matchT && matchTag) row.classList.remove('hidden'); else row.classList.add('hidden');
+
+                // 高级筛选（与统一筛选面板保持一致）
+                let advOk = true;
+                if (advTypes.length) advOk = advOk && advTypes.includes(t);
+                if (advKnowledge.length) advOk = advOk && advKnowledge.includes(k);
+                if (advTags.length) {
+                    const tagArr = tags ? tags.split(',').filter(Boolean) : [];
+                    if (advTagLogic === 'AND') advOk = advOk && advTags.every(tag => tagArr.includes(tag));
+                    else advOk = advOk && advTags.some(tag => tagArr.includes(tag));
+                }
+                if (advTime && (advTime.preset || advTime.from || advTime.to)) {
+                    const now = Date.now();
+                    let fromTs = 0, toTs = Infinity;
+                    if (advTime.preset === '7d') { fromTs = now - 7*24*60*60*1000; toTs = now; }
+                    else if (advTime.preset === '30d') { fromTs = now - 30*24*60*60*1000; toTs = now; }
+                    else if (advTime.preset === 'any') { fromTs = 0; toTs = Infinity; }
+                    else if (advTime.preset === 'custom') {
+                        fromTs = advTime.from ? Date.parse(advTime.from) : 0;
+                        toTs = advTime.to ? (Date.parse(advTime.to) + 24*60*60*1000 - 1) : Infinity;
+                    }
+                    const rowTimeStr = row.getAttribute('data-last-error-time') || '';
+                    const rowTs = rowTimeStr ? Date.parse(rowTimeStr) : 0;
+                    if (!rowTs) advOk = false; else advOk = advOk && rowTs >= fromTs && rowTs <= toTs;
+                }
+
+                if (matchSearch && matchK && matchT && matchTag && advOk) row.classList.remove('hidden'); else row.classList.add('hidden');
             });
+
+            // 如果全部被筛选隐藏，则显示提示条，并提供一键清空筛选
+            try {
+                const allRows = Array.from(document.querySelectorAll('#question-table-body tr'));
+                const visibleCount = allRows.filter(r => !r.classList.contains('hidden')).length;
+                const hint = document.getElementById('filter-empty-hint');
+                if (hint) {
+                    const hasData = (typeof questions !== 'undefined') && Array.isArray(questions) && questions.length > 0;
+                    if (visibleCount === 0 && hasData) hint.classList.remove('hidden'); else hint.classList.add('hidden');
+                    const hBtn = document.getElementById('hint-clear-filters');
+                    if (hBtn) {
+                        hBtn.onclick = function(){
+                            const clearBtn = document.getElementById('clear-filters');
+                            if (clearBtn) clearBtn.click();
+                        };
+                    }
+                }
+            } catch(_) {}
+
         }
 
         document.getElementById('search-questions').addEventListener('input', applyQuestionTableFilters);
         document.getElementById('filter-knowledge').addEventListener('change', applyQuestionTableFilters);
         document.getElementById('filter-type').addEventListener('change', applyQuestionTableFilters);
         document.getElementById('filter-error-tag').addEventListener('change', applyQuestionTableFilters);
+
+        // 清空筛选按钮
+        (function(){
+            const btn = document.getElementById('clear-filters');
+            if (!btn) return;
+            btn.addEventListener('click', function(){
+                try{
+                    // 基础筛选清空
+                    const s = document.getElementById('search-questions'); if (s) s.value = '';
+                    const k = document.getElementById('filter-knowledge'); if (k) k.value='';
+                    const t = document.getElementById('filter-type'); if (t) t.value='';
+                    const g = document.getElementById('filter-error-tag'); if (g) g.value='';
+                    // 高级筛选清空（当前模式）
+                    const mode = window.currentPracticeMode || 'normal';
+                    const emptyRules = { types: [], tags: [], tagLogic: 'OR', knowledge: [], questionCount: 0, timeRange: { preset: 'any' }, tableFilters: { knowledge: '', type: '', tag: '' } };
+                    if (window.FilterCore && window.FilterCore.saveRulesForMode) {
+                        window.FilterCore.saveRulesForMode(mode, emptyRules);
+                    } else {
+                        localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules: emptyRules, ts: new Date().toISOString() }));
+                    }
+                    applyQuestionTableFilters();
+                    showModal('提示', '已清空所有筛选条件');
+                }catch(_){ applyQuestionTableFilters(); }
+            });
+        })();
 
 
         // 点击模态框外部关闭
@@ -2523,6 +3091,7 @@
             }
         });
     </script>
+    <script src="./assets/js/filter_core.js"></script>
     <script type="module" src="./assets/js/test/practice_auto.js"></script>
 </body>
 </html>

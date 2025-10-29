@@ -1,6 +1,7 @@
 // Local persistence and batch/template management
 const LS_KEYS = {
   QUESTIONS: 'eqpp.questions',
+  ERROR_QUESTIONS: 'eqpp.errorQuestions',
   BATCHES: 'eqpp.batches',
   TEMPLATES: 'eqpp.mappingTemplates'
 };
@@ -9,7 +10,22 @@ export function loadQuestions() {
   try { return JSON.parse(localStorage.getItem(LS_KEYS.QUESTIONS) || '[]'); } catch { return []; }
 }
 export function saveQuestions(list) {
-  localStorage.setItem(LS_KEYS.QUESTIONS, JSON.stringify(list || []));
+  const items = list || [];
+  localStorage.setItem(LS_KEYS.QUESTIONS, JSON.stringify(items));
+  try {
+    window.dispatchEvent(new CustomEvent('eqpp:questions:updated', { detail: { origin: 'eqpp', count: items.length } }));
+  } catch (_) {}
+}
+
+export function loadErrorQuestions() {
+  try { return JSON.parse(localStorage.getItem(LS_KEYS.ERROR_QUESTIONS) || '[]'); } catch { return []; }
+}
+export function saveErrorQuestions(list) {
+  const items = list || [];
+  localStorage.setItem(LS_KEYS.ERROR_QUESTIONS, JSON.stringify(items));
+  try {
+    window.dispatchEvent(new CustomEvent('eqpp:errorQuestions:updated', { detail: { origin: 'eqpp', count: items.length } }));
+  } catch (_) {}
 }
 
 export function loadBatches() {
@@ -64,6 +80,10 @@ export function importTemplatesFromFile(file) {
   });
 }
 
+function genId() {
+  return 'Q' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+}
+
 export function upsertQuestions(newItems, { mode='append', matchKey='question', batchId } = {}) {
   let items = loadQuestions();
   if (mode === 'overwrite') items = [];
@@ -73,13 +93,15 @@ export function upsertQuestions(newItems, { mode='append', matchKey='question', 
       const key = String(n[matchKey]||'').trim();
       if (!key) return;
       if (map.has(key)) {
-        Object.assign(map.get(key), n, { updatedAt: new Date().toISOString(), batchId });
+        const target = map.get(key);
+        const keptId = target.id || genId();
+        Object.assign(target, n, { id: keptId, updatedAt: new Date().toISOString(), batchId });
       } else {
-        items.push({ ...n, createdAt: n.createdAt || new Date().toISOString(), batchId });
+        items.push({ ...n, id: n.id || genId(), createdAt: n.createdAt || new Date().toISOString(), batchId });
       }
     });
   } else {
-    newItems.forEach(n => items.push({ ...n, createdAt: n.createdAt || new Date().toISOString(), batchId }));
+    newItems.forEach(n => items.push({ ...n, id: n.id || genId(), createdAt: n.createdAt || new Date().toISOString(), batchId }));
   }
   saveQuestions(items);
   // Batch log
