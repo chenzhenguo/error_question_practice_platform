@@ -195,8 +195,19 @@
     log('done');
   }
 
-  function shouldRun(){ try{ const u=new URL(location.href); return !!u.searchParams.get('autoExport'); }catch(_){ return false; } }
+  function shouldRun(){
+    try{
+      const url = new URL(location.href);
+      const ok = !!url.searchParams.get('autoExport');
+      if (window.AutoCoordinator && !window.AutoCoordinator.shouldRun('export')) return false;
+      return ok;
+    }catch(_){ return false; }
+  }
   if (document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', ()=>{ if (shouldRun()) setTimeout(run, 600); });
+    document.addEventListener('DOMContentLoaded', ()=>{
+      if (!shouldRun()) return;
+      setTimeout(run, 400);
+    });
   } else { if (shouldRun()) setTimeout(run, 600); }
 })();
+

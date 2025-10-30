@@ -38,3 +38,35 @@
 .checkbox{width:16px;height:16px}
 
 hr.soft{border:0;height:1px;background:#e5e7eb;margin:10px 0}
+
+/* --- 响应式布局：区分移动端与桌面端的宽度 --- */
+
+/* 桌面端（宽屏 >=1024px）：适当加大模态框宽度，提升信息密度 */
+@media (min-width: 1024px) {
+  /* 桌面端：调窄为 960px，与原始设计一致 */
+  .modal { max-width: 960px; }
+  .modal .body { max-height: 70vh; }
+  .table th, .table td { font-size: 14px; }
+}
+
+/* 超宽屏（>=1440px）：进一步加宽，但保留一定留白 */
+@media (min-width: 1440px) {
+  /* 超宽屏：保持适度留白，略微加宽到 1000px */
+  .modal { max-width: 1000px; }
+}
+
+/* 移动端（<=767px）：收窄模态框宽度并优化表单栅格 */
+@media (max-width: 767px) {
+  /* 模态框收敛到视口宽度的 92% */
+  .modal { width: 92vw; max-width: 92vw; border-radius: 10px; }
+  .modal .body { max-height: 64vh; padding: 12px; }
+
+  /* 表单项纵向排列，避免左侧标签固定宽度造成压缩 */
+  .field-grid { grid-template-columns: 1fr; gap: 10px; }
+  /* 如果存在显式 label 元素，保证顶部对齐 */
+  .field-grid label { align-self: flex-start; }
+
+  /* 底部操作区适当增大点击区 */
+  .modal footer { padding: 12px; gap: 10px; }
+  .btn { padding: 10px 14px; }
+}

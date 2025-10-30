@@ -158,26 +158,21 @@
   function shouldAutoRun() {
     try {
       const url = new URL(window.location.href);
-      if (url.searchParams.get('autoTest') === '1') return true;
-      if ((url.hash || '').toLowerCase().includes('autotest')) return true;
+      const ok = (url.searchParams.get('autoTest') === '1') || ((url.hash||'').toLowerCase().includes('autotest'));
+      if (window.AutoCoordinator && !window.AutoCoordinator.shouldRun('import')) return false;
+      return ok;
     } catch (_) {}
     return false;
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      if (shouldAutoRun()) {
-        // slight delay to ensure UI is attached
-        setTimeout(() => {
-          runImportAutoTest();
-        }, 400);
-      }
-    });
-  } else {
-    if (shouldAutoRun()) {
-      setTimeout(() => {
-        runImportAutoTest();
-      }, 400);
-    }
-  }
+  window.addEventListener('DOMContentLoaded', ()=>{
+    if (!shouldAutoRun()) return;
+    if (window.AutoCoordinator && !window.AutoCoordinator.acquireLock('import')) return;
+    setTimeout(()=>{
+      try{
+        runImportAutoTest().finally(()=>{ try{ window.AutoCoordinator.releaseLock('import'); }catch(_){} });
+      }catch(_){ try{ window.AutoCoordinator.releaseLock('import'); }catch(__){} }
+    }, 400);
+  });
 })();
+

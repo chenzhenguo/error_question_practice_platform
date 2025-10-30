@@ -66,20 +66,35 @@
     for (const m of modes){ await runMode(m); await sleep(200); }
   }
 
-  function getParam(){ try{ const u=new URL(location.href); return (u.searchParams.get('autoFilter')||'').toLowerCase(); }catch(_){ return ''; } }
-  function shouldRun(){ return !!getParam(); }
+  function shouldRun(){
+    try{
+      const url = new URL(location.href);
+      const ok = !!url.searchParams.get('autoFilter');
+      if (window.AutoCoordinator && !window.AutoCoordinator.shouldRun('filter')) return false;
+      return ok;
+    }catch(_){ return false; }
+  }
 
   async function run(){
-    const p = getParam();
-    log('start', {mode:p||'all'});
-    if (!p || p==='all'){ await runAll(); }
-    else { await runMode(p); }
-    // Also demo table filters from requirement baseline
-    setTableFilter({knowledge:'', type:'', tag:''});
-    log('done');
+    if (window.AutoCoordinator && !window.AutoCoordinator.acquireLock('filter')) return;
+    try{
+      const p = getParam();
+      log('start', {mode:p||'all'});
+      if (!p || p==='all'){ await runAll(); }
+      else { await runMode(p); }
+      // Also demo table filters from requirement baseline
+      setTableFilter({knowledge:'', type:'', tag:''});
+      log('done');
+    } finally {
+      try{ window.AutoCoordinator.releaseLock('filter'); }catch(_){}
+    }
   }
 
   if (document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', ()=>{ if (shouldRun()) setTimeout(run, 600); });
+    window.addEventListener('DOMContentLoaded', ()=>{
+      if (!shouldRun()) return;
+      setTimeout(run, 400);
+    });
   } else { if (shouldRun()) setTimeout(run, 600); }
 })();
+

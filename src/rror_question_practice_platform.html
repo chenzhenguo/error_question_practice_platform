@@ -56,6 +56,13 @@
     </style>
     <link rel="stylesheet" href="./assets/css/import.css">
     <script type="module" src="./assets/js/main.js"></script>
+    <script src="./assets/js/storage.js"></script>
+    <!-- 错题队列与待移除服务接入 -->
+    <script src="./assets/js/storage_adapter.js"></script>
+    <script src="./assets/js/error_queue_service.js"></script>
+    <script src="./assets/js/pending_removal_service.js"></script>
+    <!-- Gist 同步模块入口（type=module，内部等待 DOMContentLoaded） -->
+    <script type="module" src="./assets/js/sync/index.js"></script>
 </head>
 <body class="font-inter bg-gray-50 text-gray-800">
     <!-- 顶部导航 -->
@@ -81,6 +88,40 @@
             </div>
         </div>
     </nav>
+
+    <!-- 同步面板与操作按钮 -->
+    <section id="sync-panel" class="hidden fixed bottom-6 right-6 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-80">
+      <h3 class="text-lg font-bold text-gray-900 mb-3">Gist Sync</h3>
+      <div class="space-y-3">
+        <div class="flex items-center gap-2">
+          <label class="text-sm text-gray-600">Gist ID</label>
+          <input id="gist-id-input" type="text" class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm" placeholder="Enter Gist ID" />
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-sm text-gray-600">Token</label>
+          <input id="token-input" type="password" class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm" placeholder="Enter token" />
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-sm text-gray-600">Datasets</label>
+          <div class="flex-1 grid grid-cols-2 gap-2">
+            <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" id="ds-answers" />answers</label>
+            <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" id="ds-error-queue" />error_queue</label>
+            <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" id="ds-settings" />settings</label>
+            <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" id="ds-progress" />progress</label>
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button id="btn-pull" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded">Pull</button>
+          <button id="btn-push" class="flex-1 bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded">Push</button>
+        </div>
+        <div id="sync-summary" class="text-xs text-gray-600"></div>
+      </div>
+      <button id="close-sync-panel" class="absolute -top-3 -right-3 bg-gray-800 text-white rounded-full w-8 h-8">×</button>
+    </section>
+
+    <button id="open-sync-panel" class="fixed bottom-6 right-6 z-40 bg-primary text-white rounded-full shadow-lg w-12 h-12 flex items-center justify-center" title="Open Gist Sync">
+      <i class="fa fa-cloud"></i>
+    </button>
 
     <!-- 移动端菜单 -->
     <div id="mobile-menu" class="hidden md:hidden bg-white border-t border-gray-200">
@@ -192,38 +233,208 @@
                         </button>
                     </div>
                 </div>
+                </div>
             </div>
+
+            <!-- 单元格编辑弹窗（双击触发） -->
+            <div id="cell-edit-modal" class="fixed inset-0 bg-black bg-opacity-40 hidden items-center justify-center z-50">
+                <div class="bg-white rounded-xl w-11/12 max-w-lg p-6 shadow-lg">
+                    <h3 class="text-lg font-bold text-gray-900 mb-4">编辑内容 / 复制</h3>
+                    <textarea id="cell-edit-textarea" class="w-full h-40 border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-primary focus:border-transparent" placeholder="Edit content..."></textarea>
+                    <div class="mt-4 flex justify-end gap-3">
+                        <button id="cell-edit-copy" class="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg transition-colors border border-gray-300">
+                            <i class="fa fa-copy mr-2"></i>Copy
+                        </button>
+                        <button id="cell-edit-save" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fa fa-save mr-2"></i>Save
+                        </button>
+                        <button id="cell-edit-cancel" class="bg-white hover:bg-gray-50 text-gray-800 px-4 py-2 rounded-lg transition-colors border border-gray-300">
+                            <i class="fa fa-times mr-2"></i>Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // 双击表格单元格弹出编辑框，支持复制与保存
+                // 仅对以下列启用：1题目、5错误原因、6正确思路/口诀、7来源
+                (function() {
+                    function initCellEdit() {
+                        // 缓存元素引用（在真正渲染后获取，避免空引用）
+                        var tbody = document.getElementById('question-table-body');
+                        var modal = document.getElementById('cell-edit-modal');
+                        var textarea = document.getElementById('cell-edit-textarea');
+                        var btnCopy = document.getElementById('cell-edit-copy');
+                        var btnSave = document.getElementById('cell-edit-save');
+                        var btnCancel = document.getElementById('cell-edit-cancel');
+                        if (!tbody || !modal || !textarea || !btnCopy || !btnSave || !btnCancel) return;
+
+                        // 当前编辑上下文：目标元素与列索引
+                        var currentTargetEl = null; // 被编辑的内容元素（一般是div.text-sm或span.text-sm）
+                        var currentRowEl = null;    // 所属的tr
+                        var currentColIndex = -1;   // 列索引（从1开始）
+
+                        // 工具：打开/关闭弹窗
+                        function openModal() {
+                            modal.classList.remove('hidden');
+                            modal.classList.add('flex');
+                            textarea.focus();
+                        }
+                        function closeModal() {
+                            modal.classList.add('hidden');
+                            modal.classList.remove('flex');
+                            textarea.value = '';
+                            currentTargetEl = null;
+                            currentRowEl = null;
+                            currentColIndex = -1;
+                        }
+
+                        // 事件委托：监听双击
+                        tbody.addEventListener('dblclick', function(e) {
+                            // 寻找最近的td
+                            var td = e.target.closest('td');
+                            if (!td) return;
+                            var tr = td.parentElement;
+                            var colIndex = td.cellIndex + 1; // 从1开始
+
+                            // 限定列：1、5、6、7
+                            if ([1,5,6,7].indexOf(colIndex) === -1) return;
+
+                            // 目标内容元素：优先选.text-sm，其次取td内第一个元素
+                            var contentEl = td.querySelector('.text-sm');
+                            if (!contentEl) contentEl = td.firstElementChild || td;
+
+                            // 读取当前文本
+                            var text = (contentEl.textContent || '').trim();
+                            textarea.value = text;
+
+                            // 记录上下文并打开弹窗
+                            currentTargetEl = contentEl;
+                            currentRowEl = tr;
+                            currentColIndex = colIndex;
+                            openModal();
+                        });
+
+                        // 复制按钮
+                        btnCopy.addEventListener('click', function() {
+                            try {
+                                navigator.clipboard.writeText(textarea.value);
+                            } catch (err) {
+                                // 回退：不支持clipboard API时
+                                var tmp = document.createElement('textarea');
+                                tmp.value = textarea.value;
+                                document.body.appendChild(tmp);
+                                tmp.select();
+                                document.execCommand('copy');
+                                document.body.removeChild(tmp);
+                            }
+                        });
+
+                        // 保存按钮：更新单元格文本与title，同时回写到tr的data-*（若有对应字段）
+                        btnSave.addEventListener('click', function() {
+                            if (!currentTargetEl) return;
+                            var newText = textarea.value;
+                            currentTargetEl.textContent = newText;
+                            currentTargetEl.setAttribute('title', newText);
+
+                            // 根据列索引回写到tr.dataset
+                            if (currentRowEl) {
+                                switch (currentColIndex) {
+                                    case 1: // 题目
+                                        currentRowEl.dataset.question = newText;
+                                        break;
+                                    case 5: // 错误原因
+                                        currentRowEl.dataset.errorreason = newText;
+                                        break;
+                                    case 6: // 正确思路/口诀
+                                        currentRowEl.dataset.correctmethod = newText;
+                                        break;
+                                    case 7: // 来源
+                                        currentRowEl.dataset.source = newText;
+                                        break;
+                                }
+                            }
+                            closeModal();
+                        });
+
+                        // 取消按钮
+                        btnCancel.addEventListener('click', closeModal);
+
+                        // 键盘支持：Esc关闭
+                        document.addEventListener('keydown', function(e) {
+                            if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+                                closeModal();
+                            }
+                        });
+
+                        // 点击遮罩关闭
+                        modal.addEventListener('click', function(e) {
+                            if (e.target === modal) {
+                                closeModal();
+                            }
+                        });
+                    }
+
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', initCellEdit);
+                    } else {
+                        initCellEdit();
+                    }
+                })();
+            </script>
         </section>
 
         <!-- 题库管理 -->
-        <section id="question-bank" class="mb-12 hidden">
+        <section id="question-bank" class="mb-12">
+            <style>
+                /* 表格长内容截断：题目、错误原因、正确思路、来源，仅显示单行省略号 */
+                #question-bank table tbody td:nth-child(1) .text-sm,
+                #question-bank table tbody td:nth-child(5) .text-sm,
+                #question-bank table tbody td:nth-child(6) .text-sm,
+                #question-bank table tbody td:nth-child(7) .text-sm {
+                    max-width: 80px;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+            </style>
             <div class="bg-white rounded-xl card-shadow overflow-hidden">
                 <div class="p-6 border-b border-gray-200">
                     <div class="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0">
                         <h2 class="text-2xl font-bold text-gray-900">题库管理</h2>
-                        <div class="flex flex-col sm:flex-row gap-3">
-                            <div class="relative">
+                        <div class="flex flex-col sm:flex-row sm:flex-wrap md:flex-nowrap items-center gap-3">
+                            <div class="relative w-full sm:w-64">
                                 <input type="text" id="search-questions" placeholder="搜索题目..." 
-                                       class="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
-                                <i class="fa fa-search absolute left-3 top-3 text-gray-400"></i>
+                                       class="h-10 pl-10 pr-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                <i class="fa fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
                             </div>
-                            <select id="filter-knowledge" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                            <select id="filter-knowledge" class="h-10 px-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
                                 <option value="">按知识点筛选</option>
                             </select>
-                            <select id="filter-type" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                            <select id="filter-type" class="h-10 px-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
                                 <option value="">按题型筛选</option>
                             </select>
-                            <select id="filter-error-tag" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                            <select id="filter-error-tag" class="h-10 px-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
                                 <option value="">按错因标签筛选</option>
                             </select>
-                            <button id="export-questions" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
-                                <i class="fa fa-download mr-2"></i>导出
+                            <button id="export-questions" class="bg-primary hover:bg-blue-700 text-white h-10 px-4 rounded-lg transition-colors" aria-label="导出">
+                                <i class="fa fa-download"></i>
                             </button>
-                            <button id="clear-filters" class="bg-white hover:bg-gray-50 text-gray-800 px-4 py-2 rounded-lg transition-colors border border-gray-300">
-                                <i class="fa fa-eraser mr-2"></i>清空筛选
+                            <button id="full-export" class="bg-green-600 hover:bg-green-700 text-white h-10 px-3 rounded-lg transition-colors" aria-label="全部导出">
+                                <i class="fa fa-file-archive-o mr-1"></i>全部导出
                             </button>
-                            <button id="reset-and-sample" class="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg transition-colors border border-gray-300">
-                                <i class="fa fa-refresh mr-2"></i>重置并加载示例数据
+                            <button id="full-import" class="bg-purple-600 hover:bg-purple-700 text-white h-10 px-3 rounded-lg transition-colors" aria-label="全部导入">
+                                <i class="fa fa-upload mr-1"></i>全部导入
+                            </button>
+                            <input id="full-import-file" type="file" accept="application/json,.json" class="hidden" />
+                            <button id="clear-filters" class="bg-white hover:bg-gray-50 text-gray-800 h-10 px-4 rounded-lg transition-colors border border-gray-300" aria-label="清空筛选">
+                                <i class="fa fa-eraser"></i>
+                            </button>
+                            <button id="clear-cache" class="bg-white hover:bg-gray-50 text-gray-800 h-10 px-4 rounded-lg transition-colors border border-gray-300" aria-label="清除缓存">
+                                <i class="fa fa-trash-o"></i>
+                            </button>
+                            <button id="reset-and-sample" class="bg-gray-100 hover:bg-gray-200 text-gray-800 h-10 px-4 rounded-lg transition-colors border border-gray-300" aria-label="重置并加载示例数据">
+                                <i class="fa fa-refresh"></i>
                             </button>
                         </div>
                     </div>
@@ -419,6 +630,7 @@
                             <span class="bg-primary text-white px-3 py-1 rounded-full text-sm font-semibold">
                                 <span id="question-type">选择题</span>
                             </span>
+                            <span id="question-status-badge" class="ml-3 px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">错题</span>
                             <span class="ml-3 text-sm text-gray-600" id="question-knowledge">定语从句</span>
                         </div>
                         <h3 id="question-content" class="text-lg font-medium text-gray-900 leading-relaxed mb-6">
@@ -519,8 +731,12 @@
                             <span id="total-answered" class="font-semibold text-green-600">0题</span>
                         </div>
                         <div class="flex justify-between items-center p-4 bg-red-50 rounded-lg">
-                            <span class="text-gray-700">总错误数</span>
-                            <span id="total-errors" class="font-semibold text-red-600">0题</span>
+                            <span class="text-gray-700">累计错误次数</span>
+                            <span id="total-errors" class="font-semibold text-red-600">0次</span>
+                        </div>
+                        <div class="flex justify-between items-center p-4 bg-purple-50 rounded-lg">
+                            <span class="text-gray-700">错题本题目数</span>
+                            <span id="error-book-summary-count" class="font-semibold text-purple-600">0题</span>
                         </div>
                         <div class="flex justify-between items-center p-4 bg-yellow-50 rounded-lg">
                             <span class="text-gray-700">平均正确率</span>
@@ -715,11 +931,54 @@
             studyDays: 0,
             dailyData: []
         };
+        // 新增：题目作答历史索引（优先未做题排序使用）
+        window.StudyIndex = (function(){
+            const KEY = 'eqpp.studyIndex';
+            function load(){
+                try{
+                    const raw = (window.StorageUtil && typeof window.StorageUtil.get==='function')
+                        ? (window.StorageUtil.get(KEY, {}) || {})
+                        : JSON.parse(localStorage.getItem(KEY) || '{}');
+                    return raw || {};
+                }catch(_){ return {}; }
+            }
+            function save(map){
+                try{
+                    if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                        window.StorageUtil.set(KEY, map);
+                    } else {
+                        localStorage.setItem(KEY, JSON.stringify(map));
+                    }
+                }catch(_){}
+            }
+            function markAnswered(id){
+                try{
+                    if(!id) return;
+                    const map = load();
+                    const rec = map[id] || { answeredCount: 0 };
+                    rec.answeredCount = (rec.answeredCount || 0) + 1;
+                    rec.lastAnsweredAt = new Date().toISOString();
+                    map[id] = rec;
+                    save(map);
+                }catch(_){}
+            }
+            function get(id){
+                const map = load();
+                return id ? (map[id] || null) : null;
+            }
+            function isDone(id){
+                const rec = get(id);
+                return !!(rec && rec.answeredCount > 0);
+            }
+            return { load, save, markAnswered, get, isDone };
+        })();
         // 新增：练习设置（答对自动下一题/背题模式/选项乱序）
         let practiceSettings = { autoNext: false, memorize: false, shuffle: true };
         function loadPracticeSettings() {
             try {
-                const saved = JSON.parse(localStorage.getItem('practiceSettings') || '{}');
+                const saved = (window.StorageUtil && typeof window.StorageUtil.get==='function')
+                    ? (window.StorageUtil.get('practiceSettings', {}) || {})
+                    : JSON.parse(localStorage.getItem('practiceSettings') || '{}');
                 practiceSettings = {
                     autoNext: !!saved.autoNext,
                     memorize: !!saved.memorize,
@@ -730,7 +989,11 @@
             }
         }
         function savePracticeSettings() {
-            localStorage.setItem('practiceSettings', JSON.stringify(practiceSettings));
+            if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                window.StorageUtil.set('practiceSettings', practiceSettings);
+            } else {
+                localStorage.setItem('practiceSettings', JSON.stringify(practiceSettings));
+            }
         }
         function isMemorizeActive() {
             return currentPracticeMode === 'memorize' || !!practiceSettings.memorize;
@@ -783,6 +1046,20 @@
         function initializeApp() {
             // 导航功能
             setupNavigation();
+            // 初始路由：根据 URL hash 显示对应视图；无 hash 默认显示数据概览
+            (function(){
+                var defaultSection = 'dashboard';
+                var allowed = ['dashboard','question-bank','practice','practice-interface','error-book','statistics','daily-practice-settings','practice-result'];
+                var initial = (location.hash || ('#' + defaultSection)).substring(1);
+                if (allowed.indexOf(initial) === -1) { initial = defaultSection; }
+                showSection(initial);
+                // 监听 hash 变化，切换视图
+                window.addEventListener('hashchange', function(){
+                    var id = (location.hash || ('#' + defaultSection)).substring(1);
+                    if (allowed.indexOf(id) === -1) { id = defaultSection; }
+                    showSection(id);
+                });
+            })();
             
             // 文件导入功能
             setupFileImport();
@@ -801,23 +1078,66 @@
             // 加载保存的数据
             loadSavedData();
 
+            // 全量导出/导入（数据备份与恢复）按钮绑定
+            setupFullBackup();
+
             // 监听存储层更新事件（来自模块或其他页面），实现实时刷新
-            const refreshAfterDataChange = (() => {
-                let timer;
-                return function() {
-                    clearTimeout(timer);
-                    timer = setTimeout(() => {
-                        try { loadSavedData(); } catch(e) { console.warn('[loadSavedData] failed', e); }
-                    }, 50);
-                };
-            })();
-            try {
-                window.addEventListener('legacy:questions:updated', refreshAfterDataChange);
-                window.addEventListener('legacy:errorQuestions:updated', refreshAfterDataChange);
-                window.addEventListener('legacy:studyData:updated', refreshAfterDataChange);
-                window.addEventListener('eqpp:questions:updated', refreshAfterDataChange);
-                window.addEventListener('eqpp:errorQuestions:updated', refreshAfterDataChange);
-                window.addEventListener('storage', (e) => {
+                const refreshAfterDataChange = (() => {
+                    let timer;
+                    return function() {
+                        clearTimeout(timer);
+                        timer = setTimeout(() => {
+                            try { loadSavedData(); } catch(e) { console.warn('[loadSavedData] failed', e); }
+                        }, 50);
+                    };
+                })();
+
+                // 清除缓存（保留本地答题数据）
+                (function(){
+                    var btnClearCache = document.getElementById('clear-cache');
+                    if (!btnClearCache) return;
+                    // 使用统一存储封装，清除缓存但保留答题数据
+                    btnClearCache.addEventListener('click', function(){
+                        try {
+                            if (window.StorageUtil && typeof window.StorageUtil.clearCachePreserveData === 'function') {
+                                window.StorageUtil.clearCachePreserveData();
+                            } else {
+                                // 兼容旧逻辑：若未加载 storage.js，仍按旧方式执行
+                                var preserve = new Set([
+                                    'questions', 'errorQuestions', 'studyData',
+                                    'eqpp.questions', 'eqpp.errorQuestions', 'eqpp.studyIndex',
+                                    'practiceSettings', 'dailyPracticeSettings'
+                                ]);
+                                var toRemove = [];
+                                for (var i = 0; i < localStorage.length; i++) {
+                                    var k = localStorage.key(i);
+                                    if (!k) continue;
+                                    if (k.indexOf('practiceFilter:') === 0) { toRemove.push(k); continue; }
+                                    if (!preserve.has(k)) {
+                                        if (k.indexOf('eqpp.') === 0 || k === '__AUTO_RESUME__' || k === 'eqpp.batches' || k === 'eqpp.mappingTemplates') {
+                                            toRemove.push(k);
+                                        }
+                                    }
+                                }
+                                toRemove.forEach(function(k){ localStorage.removeItem(k); });
+                                console.log('[Cache] cleared non-answer data keys:', toRemove);
+                                try { loadSavedData(); } catch(_){ }
+                                alert('Cache cleared. Answer data preserved.');
+                            }
+                        } catch(e) {
+                            console.warn('[Cache] clear failed:', e);
+                            alert('Failed to clear cache.');
+                        }
+                    });
+                })();
+
+                try {
+                    window.addEventListener('legacy:questions:updated', refreshAfterDataChange);
+                    window.addEventListener('legacy:errorQuestions:updated', refreshAfterDataChange);
+                    window.addEventListener('legacy:studyData:updated', refreshAfterDataChange);
+                    window.addEventListener('eqpp:questions:updated', refreshAfterDataChange);
+                    window.addEventListener('eqpp:errorQuestions:updated', refreshAfterDataChange);
+                    window.addEventListener('storage', (e) => {
                     const keys = ['questions','eqpp.questions','errorQuestions','studyData'];
                     if (e && keys.includes(e.key)) refreshAfterDataChange();
                 });
@@ -830,7 +1150,10 @@
             navLinks.forEach(link => {
                 link.addEventListener('click', function(e) {
                     e.preventDefault();
-                    const targetId = this.getAttribute('href').substring(1);
+                    var targetId = this.getAttribute('href').substring(1);
+                    // 更新 URL hash，支持刷新后保留当前页面
+                    location.hash = '#' + targetId;
+                    // 切换视图
                     showSection(targetId);
                 });
             });
@@ -847,7 +1170,10 @@
             mobileNavLinks.forEach(link => {
                 link.addEventListener('click', function(e) {
                     e.preventDefault();
-                    const targetId = this.getAttribute('href').substring(1);
+                    var targetId = this.getAttribute('href').substring(1);
+                    // 更新 URL hash，支持刷新后保留当前页面
+                    location.hash = '#' + targetId;
+                    // 切换视图
                     showSection(targetId);
                     mobileMenu.classList.add('hidden');
                 });
@@ -1280,12 +1606,21 @@
             practiceStartTime = Date.now();
             practiceAnswers = [];
 
+            // 进入错误练习模式时，标记本会话抽查（供待移除审计使用）
+            try {
+                if (window.PendingRemovalService && typeof window.PendingRemovalService.markSessionAudit === 'function') {
+                    window.PendingRemovalService.markSessionAudit(mode === 'error');
+                }
+            } catch (_) {}
+
+
             // 小开关：进入模式时自动应用最近一次规则
             if (window.featureAutoApplyLastRules) {
                 try {
-                    const cacheRaw = localStorage.getItem(`practiceFilter:${mode}`);
-                    if (cacheRaw) {
-                        const cache = JSON.parse(cacheRaw) || {};
+                    const cache = (window.StorageUtil && typeof window.StorageUtil.get==='function')
+                        ? (window.StorageUtil.get(`practiceFilter:${mode}`, null))
+                        : (function(){ try{ const r = localStorage.getItem(`practiceFilter:${mode}`); return r ? (JSON.parse(r)||{}) : null; }catch(_){ return null; } })();
+                    if (cache) {
                         const { rules = {} } = cache;
                         const { knowledge = [], tableFilters = {} } = rules;
                         // 知识点模式：若当前未选择或为空，则恢复最近一次选择
@@ -1316,9 +1651,39 @@
                 case 'random':
                     practiceQuestions = [...questions].sort(() => Math.random() - 0.5);
                     break;
-                case 'error':
-                    practiceQuestions = [...errorQuestions];
+                case 'error': {
+                    // 错题模式：将错题列表与题库详情合并，确保显示选项与正确答案
+                    const errs = Array.isArray(errorQuestions) ? errorQuestions : [];
+                    const qMap = new Map(Array.isArray(questions) ? questions.map(q => [String(q.id), q]) : []);
+                    let eqppList = [];
+                    try { eqppList = JSON.parse(localStorage.getItem('eqpp.questions') || '[]'); } catch(_) {}
+                    const eqppMap = new Map(Array.isArray(eqppList) ? eqppList.map(q => [String(q.id), q]) : []);
+                    practiceQuestions = errs.map(e => {
+                        const id = String(e && e.id);
+                        let base = qMap.get(id);
+                        if (!base) {
+                            const eq = eqppMap.get(id);
+                            if (eq) {
+                                base = {
+                                    id: eq.id,
+                                    content: eq.question || eq.content || '',
+                                    correctAnswer: eq.answer || eq.correctAnswer || '',
+                                    options: eq.options || '',
+                                    type: eq.type || '',
+                                    knowledge: eq.knowledge || '',
+                                    analysis: eq.analysis || '',
+                                    note: eq.note || '',
+                                    tags: eq.tags || '',
+                                    source: eq.source || ''
+                                };
+                            }
+                        }
+                        const merged = base ? Object.assign({}, base, e) : e;
+                        if (!merged.correctAnswer && merged.answer) merged.correctAnswer = merged.answer;
+                        return merged;
+                    }).filter(q => q && (q.content || q.question || q.correctAnswer));
                     break;
+                }
                 case 'simulation':
                     practiceQuestions = [...questions].sort(() => Math.random() - 0.5).slice(0, 50);
                     break;
@@ -1354,6 +1719,34 @@
                         ? window.FilterCore.filterQuestions(practiceQuestions, adv, window.studyData)
                         : practiceQuestions;
                 }
+                // 未做题目过滤与排序（数量截断前）
+                const idxMap = (window.StudyIndex && typeof window.StudyIndex.load==='function') ? window.StudyIndex.load() : {};
+                if (adv && adv.onlyUndone) {
+                    practiceQuestions = practiceQuestions.filter(q => !(q && q.id && idxMap[q.id] && idxMap[q.id].answeredCount > 0));
+                }
+                if (adv && adv.preferUndone) {
+                    practiceQuestions = [...practiceQuestions].sort((a, b) => {
+                        const aDone = !!(a && a.id && idxMap[a.id] && idxMap[a.id].answeredCount > 0);
+                        const bDone = !!(b && b.id && idxMap[b.id] && idxMap[b.id].answeredCount > 0);
+                        if (aDone === bDone) return 0;
+                        return aDone ? 1 : -1; // 未做优先
+                    });
+                }
+            } catch(_) {}
+
+            // 错题模式：若需要抽查，将待移除条目置顶
+            try {
+                if (mode === 'error' && window.PendingRemovalService && window.StorageAdapter) {
+                    const needAudit = !!window.PendingRemovalService.shouldAuditNow();
+                    const list = window.StorageAdapter.loadErrorQuestions();
+                    const pendingIds = Array.isArray(list) ? list.filter(x => x && x.status === 'pendingRemoval').map(x => String(x.id)) : [];
+                    if (needAudit && pendingIds.length > 0) {
+                        const pendings = practiceQuestions.filter(q => q && pendingIds.includes(String(q.id)));
+                        const others = practiceQuestions.filter(q => !(q && pendingIds.includes(String(q.id))));
+                        practiceQuestions = [...pendings, ...others];
+                        console.log('[AuditOrdering]', { pendingTopCount: pendings.length, total: practiceQuestions.length });
+                    }
+                }
             } catch(_) {}
 
             // 应用答题数量限制（如设置）
@@ -1384,7 +1777,13 @@
                     questionCount: parseInt(adv.questionCount||0)||0
                 };
                 console.log('[FilterStats]', { mode, rules, matchedCount: practiceQuestions.length });
-                try { localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules, ts: new Date().toISOString() })); } catch(_) {}
+                try {
+                    if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                        window.StorageUtil.set(`practiceFilter:${mode}`, { rules, ts: new Date().toISOString() });
+                    } else {
+                        localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules, ts: new Date().toISOString() }));
+                    }
+                } catch(_) {}
             } catch(_) {}
 
             if (practiceQuestions.length === 0) {
@@ -1423,6 +1822,25 @@
             // 加载选项
             loadOptions(question);
 
+            // 更新状态徽章（错题/待移除抽查）
+            try {
+                if (window.StorageAdapter) {
+                    const list = window.StorageAdapter.loadErrorQuestions();
+                    const rec = Array.isArray(list) ? list.find(x => String(x.id) === String(question.id)) : null;
+                    const badge = document.getElementById('question-status-badge');
+                    if (badge) {
+                        let text = '错题';
+                        let cls = 'ml-3 px-2 py-1 text-xs rounded-full bg-red-100 text-red-800';
+                        if (rec && rec.status === 'pendingRemoval') {
+                            text = '待移除抽查';
+                            cls = 'ml-3 px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800';
+                        }
+                        badge.textContent = text;
+                        badge.className = cls;
+                    }
+                }
+            } catch(_) {}
+
             // 重置答案和解析显示
             document.getElementById('answer-analysis').classList.add('hidden');
             document.getElementById('show-answer').classList.add('hidden');
@@ -1452,7 +1870,7 @@
             const optionsContainer = document.getElementById('question-options');
             optionsContainer.innerHTML = '';
 
-            if (!question.options) return;
+            /* options fallback handled below */
 
             // Robust option parsing: support array format [{key,text}] and inline string like "A.xxx B.yyy C.zzz D.www"
             function toHalfWidth(str = '') {
@@ -1503,7 +1921,30 @@
                 return opts.map((o, i) => ({ key: String.fromCharCode(65 + i), text: o.text }));
             }
 
-            const parsed = parseOptions(question.options).filter(o => o && o.key && o.text);
+            let parsed = parseOptions(question.options);
+            if (!parsed || !parsed.length) {
+                try {
+                    if (typeof question.content === 'string') {
+                        const fallback = parseOptions(question.content);
+                        if (Array.isArray(fallback) && fallback.length) {
+                            parsed = fallback;
+                            // 清理题干：去除内联选项后的纯题干显示
+                            try {
+                                const s = String(question.content||'');
+                                const tokenRe = /(?:^|[\s\n\r])[\(（]?([A-F])[\)）]?[\.、．，,)）]?\s*/g;
+                                const m2 = tokenRe.exec(s);
+                                if (m2 && m2.index > 0) {
+                                    const stem = s.slice(0, m2.index).trim();
+                                    const el = document.getElementById('question-content');
+                                    if (el) el.textContent = stem;
+                                }
+                            } catch(_) {}
+                            console.warn('[loadOptions] Fallback to inline options from content');
+                        }
+                    }
+                } catch(_) {}
+            }
+            parsed = (Array.isArray(parsed)? parsed: []).filter(o => o && o.key && o.text);
             
             // 随机模式或开启“选项乱序”时打乱选项（保留选项字母与内容的绑定）
             console.log('[loadOptions]', { shuffle: shouldShuffleOptions(), mode: currentPracticeMode, settingShuffle: !!(practiceSettings && practiceSettings.shuffle) });
@@ -1540,6 +1981,7 @@
                 selectedOption: selectedOption,
                 answeredAt: Date.now()
             };
+            try { if (window.StudyIndex && typeof window.StudyIndex.markAnswered==='function') window.StudyIndex.markAnswered(questionId); } catch(_){}
         }
 
         function showAnswer() {
@@ -1548,8 +1990,13 @@
             
             if (!selectedAnswer) return;
 
-            const isCorrect = selectedAnswer === question.correctAnswer;
-            console.log('[showAnswer]', { selected: selectedAnswer, correct: question.correctAnswer, isCorrect, autoNext: !!(practiceSettings && practiceSettings.autoNext), memorizeActive: isMemorizeActive() });
+            const normalizedCorrect = (function(ans){
+                const s = String(ans||'').trim().replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+                const m = s.match(/^[\(（]?([A-Fa-f])[ \)）\.、．，,）]?/);
+                return m ? m[1].toUpperCase() : s.toUpperCase();
+            })(question.correctAnswer);
+            const isCorrect = selectedAnswer === normalizedCorrect;
+            console.log('[showAnswer]', { selected: selectedAnswer, correct: normalizedCorrect, isCorrect, autoNext: !!(practiceSettings && practiceSettings.autoNext), memorizeActive: isMemorizeActive() });
             
             // 更新选项显示
             const optionElements = document.querySelectorAll('.option-item');
@@ -1557,7 +2004,7 @@
                 const optionValue = option.querySelector('input').value;
                 const optionText = option.querySelector('.option-text');
                 
-                if (optionValue === question.correctAnswer) {
+                if (optionValue === normalizedCorrect) {
                     option.classList.add('border-green-500', 'bg-green-50');
                     optionText.classList.add('text-green-700', 'font-semibold');
                 } else if (optionValue === selectedAnswer && !isCorrect) {
@@ -1566,17 +2013,62 @@
                 }
             });
 
-            // 显示答案和解析
-            document.getElementById('correct-answer').textContent = `正确答案：${question.correctAnswer}`;
+            // 显示解析（不单独展示“正确答案”框，改为直接标注正确选项为绿色）
+            try {
+                const correctBox = document.querySelector('#answer-analysis .bg-green-50');
+                if (correctBox) { correctBox.classList.add('hidden'); }
+            } catch(_) {}
             document.getElementById('question-analysis').textContent = question.analysis || '暂无解析';
             document.getElementById('answer-analysis').classList.remove('hidden');
 
-            // 更新题目状态
-            if (!isCorrect) {
-                addToErrorBook(question);
+            // 更新错题队列状态（集成错误队列服务）
+            try {
+                if (!isCorrect) {
+                    if (window.ErrorQueueService && typeof window.ErrorQueueService.recordError === 'function') {
+                        window.ErrorQueueService.recordError(question && question.id);
+                    } else {
+                        // 兼容旧逻辑：若服务未加载，仍使用旧错题入账
+                        addToErrorBook(question);
+                    }
+                } else {
+                    if (window.ErrorQueueService && typeof window.ErrorQueueService.recordCorrect === 'function') {
+                        window.ErrorQueueService.recordCorrect(question && question.id);
+                    }
+                }
+            } catch (e) {
+                console.warn('[EQPP] record error/correct failed:', e);
             }
 
+            // 如为待移除抽查题，基于答题结果执行最终移除或回归
+            try {
+                if (window.StorageAdapter && window.PendingRemovalService) {
+                    const list = window.StorageAdapter.loadErrorQuestions();
+                    const idx = Array.isArray(list) ? list.findIndex(x => String(x.id) === String(question && question.id)) : -1;
+                    const isPending = idx >= 0 && list[idx] && list[idx].status === 'pendingRemoval';
+                    if (isPending) {
+                        if (isCorrect) {
+                            window.PendingRemovalService.finalRemove(question && question.id);
+                        } else {
+                            window.PendingRemovalService.reintegrateOnError(question && question.id);
+                        }
+                    }
+                }
+            } catch (_) {}
+
             // 更新统计
+            // 刷新状态徽章（答题后）
+            try {
+                const badge = document.getElementById('question-status-badge');
+                if (badge && window.StorageAdapter) {
+                    const list = window.StorageAdapter.loadErrorQuestions();
+                    const rec = Array.isArray(list) ? list.find(x => String(x.id) === String(question && question.id)) : null;
+                    let text = '错题';
+                    let cls = 'ml-3 px-2 py-1 text-xs rounded-full bg-red-100 text-red-800';
+                    if (rec && rec.status === 'pendingRemoval') { text = '待移除抽查'; cls = 'ml-3 px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800'; }
+                    if (isCorrect && !rec) { text = '已移除'; cls = 'ml-3 px-2 py-1 text-xs rounded-full bg-green-100 text-green-800'; }
+                    badge.textContent = text; badge.className = cls;
+                }
+            } catch(_) {}
             updateCurrentAccuracy();
 
             // 新增：答对自动跳转下一题（带防抖处理）
@@ -1768,7 +2260,11 @@
                 enabled: true
             };
             
-            localStorage.setItem('dailyPracticeSettings', JSON.stringify(settings));
+            if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                window.StorageUtil.set('dailyPracticeSettings', settings);
+            } else {
+                localStorage.setItem('dailyPracticeSettings', JSON.stringify(settings));
+            }
             
             // 设置每日提醒
             if (Notification.permission === 'granted') {
@@ -2005,7 +2501,13 @@
             document.getElementById('total-answered').textContent = 
                 `${studyData.totalAnswered}题`;
             document.getElementById('total-errors').textContent = 
-                `${studyData.totalErrors}题`;
+                `${studyData.totalErrors}次`;
+            // 新增：错题本题目数（与错题本列表一致）
+            try {
+                const count = Array.isArray(errorQuestions) ? errorQuestions.length : 0;
+                const el = document.getElementById('error-book-summary-count');
+                if (el) el.textContent = `${count}题`;
+            } catch(_) {}
             
             const avgAccuracy = studyData.totalAnswered > 0 ? 
                 Math.round(((studyData.totalAnswered - studyData.totalErrors) / studyData.totalAnswered) * 100) : 0;
@@ -2491,7 +2993,13 @@
                     return;
                 }
                 window.selectedKnowledgeFilter = selected;
-                try { localStorage.setItem('practiceFilter:knowledge', JSON.stringify({ rules: { knowledge: selected }, ts: new Date().toISOString() })); } catch(_) {}
+                try {
+                    if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                        window.StorageUtil.set('practiceFilter:knowledge', { rules: { knowledge: selected }, ts: new Date().toISOString() });
+                    } else {
+                        localStorage.setItem('practiceFilter:knowledge', JSON.stringify({ rules: { knowledge: selected }, ts: new Date().toISOString() }));
+                    }
+                } catch(_) {}
                 closeModal();
                 startPractice('knowledge');
             });
@@ -2504,10 +3012,21 @@
             const modes = ['normal','random','error','simulation','chapter','knowledge','memorize'];
             const cur = window.currentPracticeMode || 'normal';
             const modeLabels = { normal: '顺序', random: '随机', error: '错题', simulation: '模拟', chapter: '章节', knowledge: '知识点', memorize: '背题' };
-            const modeOptions = modes.map(m=>`<option value="${m}" ${m===cur?'selected':''}>${modeLabels[m] || m}</option>`).join('');
+            const tabBase = 'inline-block rounded-full px-3 py-1 text-sm text-white cursor-pointer transition focus:outline-none focus:ring-2 focus:ring-primary';
+            const tabHtml = modes.map(m=>`<button role="tab" data-mode="${m}" class="${tabBase} ${m===cur?'bg-primary border-primary':'bg-secondary border-secondary'}" aria-selected="${m===cur?'true':'false'}" tabindex="${m===cur?'0':'-1'}">${modeLabels[m] || m}</button>`).join('');
 
             const getRule = (mode)=>{
-                try{ const raw = localStorage.getItem(`practiceFilter:${mode}`); if(!raw) return {}; const obj = JSON.parse(raw)||{}; return obj.rules||{}; }catch(_){ return {}; }
+                try {
+                    if (window.StorageUtil && typeof window.StorageUtil.get==='function') {
+                        const obj = window.StorageUtil.get(`practiceFilter:${mode}`, null);
+                        return (obj && obj.rules) ? obj.rules : {};
+                    } else {
+                        const raw = localStorage.getItem(`practiceFilter:${mode}`);
+                        if(!raw) return {};
+                        const obj = JSON.parse(raw)||{};
+                        return obj.rules||{};
+                    }
+                } catch(_){ return {}; }
             };
             const rules = getRule(cur);
             const rTypes = Array.isArray(rules.types) ? rules.types : [];
@@ -2515,6 +3034,8 @@
             const rTagLogic = (rules.tagLogic==='AND'||rules.tagLogic==='OR')? rules.tagLogic : 'OR';
             const rCount = Number.isFinite(+rules.questionCount) ? parseInt(rules.questionCount) : '';
             const rTime = (rules.timeRange && typeof rules.timeRange==='object') ? rules.timeRange : { preset: 'any' };
+            const rPreferUndone = !!rules.preferUndone;
+            const rOnlyUndone = !!rules.onlyUndone;
 
             const chip = 'inline-block rounded-full border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer transition peer-checked:bg-primary peer-checked:text-white peer-checked:border-primary';
             const typesHtml = allTypes.length ? allTypes.map(t=>`<label class="select-none"><input type="checkbox" value="${t}" class="peer sr-only" ${rTypes.includes(t)?'checked':''}/><span class="${chip}">${t}</span></label>`).join('') : '<div class="text-sm text-gray-500">暂无题型数据</div>';
@@ -2530,9 +3051,10 @@
                     <div class="grid grid-cols-1 gap-4">
                         <div class="space-y-2">
                             <label class="block text-sm text-gray-700">目标模式</label>
-                            <select id="ufp-mode" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary">
-                                ${modeOptions}
-                            </select>
+                            <div id="ufp-mode-tabs" role="tablist" class="flex flex-wrap gap-2">
+                                ${tabHtml}
+                            </div>
+                            <div class="text-xs text-gray-500">提示：使用 Tab/方向键切换，Enter/Space 选择</div>
                         </div>
                         <div class="space-y-2">
                             <label class="block text-sm text-gray-700">错因标签逻辑</label>
@@ -2564,6 +3086,12 @@
                                 <input id="ufp-date-to" type="date" value="${rTime.to||''}" class="border rounded-lg px-2 py-1"/>
                             </div>
                             <div class="text-xs text-gray-500">依据“最后错题时间”进行筛选；无时间记录的题目在开启时间筛选时将被排除</div>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="block text-sm text-gray-700">优先级</label>
+                            <label class="flex items-center gap-2 select-none"><input id="ufp-prefer-undone" type="checkbox" class="form-checkbox h-4 w-4 text-primary" ${rPreferUndone?'checked':''}/><span>优先显示未做题目</span></label>
+                            <label class="flex items-center gap-2 select-none"><input id="ufp-only-undone" type="checkbox" class="form-checkbox h-4 w-4 text-primary" ${rOnlyUndone?'checked':''}/><span>仅显示未做题目</span></label>
+                            <div class="text-xs text-gray-500">“仅显示未做题目”会排除所有已做过的题；“优先显示未做题目”只调整排序。</div>
                         </div>
                     </div>
 
@@ -2602,14 +3130,124 @@
             `;
 
             showModalContent(modalContent);
-            // 放大当前弹窗宽度以适配筛选布局
+            // 调整弹窗宽度为更紧凑尺寸，限制高度并滚动
             (function widenModal(){
                 const modalBox = document.querySelector('#modal > div');
-                if(modalBox){ modalBox.className = 'bg-white rounded-xl p-6 max-w-5xl w-[96vw] md:w-[80vw] mx-4 card-shadow'; }
+                if(modalBox){ modalBox.className = 'bg-white rounded-xl p-4 max-w-3xl w-[92vw] md:w-[64vw] mx-4 card-shadow max-h-[80vh] overflow-y-auto'; }
             })();
 
             const $ = (sel)=>document.querySelector(sel);
             const $$ = (sel)=>Array.from(document.querySelectorAll(sel));
+
+            // 目标模式：Tab 切换与键盘导航
+            (function bindModeTabs(){
+                const tablist = document.getElementById('ufp-mode-tabs');
+                if(!tablist) return;
+                const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+                let selectedMode = (window.currentPracticeMode||'normal');
+
+                const setSelected = (btn)=>{
+                    tabs.forEach(t=>{
+                        const active = (t===btn);
+                        t.setAttribute('aria-selected', active? 'true':'false');
+                        t.tabIndex = active? 0 : -1;
+                        // 所有按钮统一白字
+                        t.classList.add('text-white');
+                        if(active){
+                            t.classList.add('bg-primary','border-primary');
+                            t.classList.remove('bg-secondary','border-secondary');
+                        }else{
+                            t.classList.add('bg-secondary','border-secondary');
+                            t.classList.remove('bg-primary','border-primary');
+                        }
+                    });
+                    selectedMode = btn?.dataset?.mode || selectedMode;
+                    // 新增：根据切换的模式回显已保存配置
+                    try { if (typeof rehydrate==='function') rehydrate(selectedMode); } catch(_){}
+                };
+                // 初始选中
+                const init = tablist.querySelector('[aria-selected="true"]') || tabs[0];
+                if(init) setSelected(init);
+
+                // 鼠标选择
+                tabs.forEach(t=> t.addEventListener('click', ()=> setSelected(t)));
+
+                // 键盘导航
+                tablist.addEventListener('keydown', (e)=>{
+                    const idx = tabs.indexOf(document.activeElement);
+                    if(e.key==='ArrowRight' || e.key==='ArrowDown'){
+                        const next = tabs[(idx+1)%tabs.length]; next?.focus(); e.preventDefault();
+                    }else if(e.key==='ArrowLeft' || e.key==='ArrowUp'){
+                        const prev = tabs[(idx-1+tabs.length)%tabs.length]; prev?.focus(); e.preventDefault();
+                    }else if(e.key==='Home'){
+                        tabs[0]?.focus(); e.preventDefault();
+                    }else if(e.key==='End'){
+                        tabs[tabs.length-1]?.focus(); e.preventDefault();
+                    }else if(e.key==='Enter' || e.key===' '){
+                        const el = document.activeElement;
+                        if(el && el.getAttribute('role')==='tab') setSelected(el);
+                    }
+                });
+
+                // 暴露当前选择供保存使用
+                window.__UfpSelectedMode__ = ()=> selectedMode;
+            })();
+
+            // 新增：按模式回显已保存配置（types/tags/逻辑/数量/时间/优先级）
+            function rehydrate(mode){
+                try{
+                    const rules = (function(){
+                        try {
+                            if (window.StorageUtil && typeof window.StorageUtil.get==='function') {
+                                const obj = window.StorageUtil.get(`practiceFilter:${mode}`, null);
+                                return (obj && obj.rules) ? obj.rules : {};
+                            } else {
+                                const raw = localStorage.getItem(`practiceFilter:${mode}`);
+                                if(!raw) return {};
+                                const obj = JSON.parse(raw)||{};
+                                return obj.rules||{};
+                            }
+                        } catch(_){ return {}; }
+                    })();
+                    const rTypes = Array.isArray(rules.types) ? rules.types : [];
+                    const rTags = Array.isArray(rules.tags) ? rules.tags : [];
+                    const rTagLogic = (rules.tagLogic==='AND'||rules.tagLogic==='OR')? rules.tagLogic : 'OR';
+                    const rCount = Number.isFinite(+rules.questionCount) ? parseInt(rules.questionCount) : '';
+                    const rTime = (rules.timeRange && typeof rules.timeRange==='object') ? rules.timeRange : { preset: 'any' };
+                    const rPreferUndone = !!rules.preferUndone;
+                    const rOnlyUndone = !!rules.onlyUndone;
+
+                    // 标签逻辑
+                    const logicRadio = document.querySelector(`input[name='ufp-tag-logic'][value='${rTagLogic}']`);
+                    if (logicRadio) logicRadio.checked = true;
+
+                    // 每次答题数量
+                    const cnt = document.getElementById('ufp-count');
+                    if (cnt) cnt.value = rCount || '';
+
+                    // 时间筛选
+                    const presets = Array.from(document.querySelectorAll("input[name='ufp-time-preset']"));
+                    presets.forEach(r=>{ r.checked = (r.value === (rTime.preset||'any')); });
+                    const df = document.getElementById('ufp-date-from'); if (df) df.value = rTime.from || '';
+                    const dt = document.getElementById('ufp-date-to'); if (dt) dt.value = rTime.to || '';
+                    const customBox = document.getElementById('ufp-time-custom');
+                    if (customBox) customBox.classList.toggle('hidden', (rTime.preset||'any')!=='custom');
+
+                    // 优先级
+                    const preferC = document.getElementById('ufp-prefer-undone'); if (preferC) preferC.checked = rPreferUndone;
+                    const onlyC = document.getElementById('ufp-only-undone'); if (onlyC) onlyC.checked = rOnlyUndone;
+
+                    // 题型与标签列表
+                    const typesList = document.getElementById('ufp-types-list');
+                    if (typesList){ typesList.querySelectorAll("input[type='checkbox']").forEach(cb=>{ cb.checked = rTypes.includes(cb.value); }); }
+                    const tagsList = document.getElementById('ufp-tags-list');
+                    if (tagsList){ tagsList.querySelectorAll("input[type='checkbox']").forEach(cb=>{ cb.checked = rTags.includes(cb.value); }); }
+
+                    // 更新摘要
+                    try { updateSummary('#ufp-types-list'); updateSummary('#ufp-tags-list'); } catch(_){}
+                }catch(_){ /* ignore */ }
+            }
+
 
             // 时间筛选：自定义日期框显隐切换
             (function bindTimePresetToggle(){
@@ -2666,8 +3304,7 @@
             $('#ufp-cancel').addEventListener('click', closeModal);
 
             $('#ufp-apply').addEventListener('click', ()=>{
-                const modeSel = $('#ufp-mode');
-                const mode = modeSel ? modeSel.value : (window.currentPracticeMode||'normal');
+                const mode = (document.querySelector('#ufp-mode-tabs [aria-selected="true"]')?.dataset.mode) || (window.currentPracticeMode||'normal');
                 const types = $$('#ufp-types-list input[type=\"checkbox\"]:checked').map(x=>x.value);
                 const tags = $$('#ufp-tags-list input[type=\"checkbox\"]:checked').map(x=>x.value);
                 const tagLogic = ($('input[name=\"ufp-tag-logic\"]:checked')?.value) || 'OR';
@@ -2679,16 +3316,27 @@
                     from: $('#ufp-date-from')?.value || '',
                     to: $('#ufp-date-to')?.value || ''
                 } : { preset: timePreset };
-                const patch = { types, tags, tagLogic, questionCount: countVal, timeRange };
+                const preferUndone = !!($('#ufp-prefer-undone')?.checked);
+                const onlyUndone = !!($('#ufp-only-undone')?.checked);
+                const patch = { types, tags, tagLogic, questionCount: countVal, timeRange, preferUndone, onlyUndone };
                 if (window.FilterCore && window.FilterCore.saveRulesForMode) {
                     const saved = window.FilterCore.saveRulesForMode(mode, patch);
                     console.log('[FilterStats]', { mode, rules: Object.assign({}, saved), from: 'UnifiedFilterPanel.Save' });
                 } else {
                     try {
-                        const raw = localStorage.getItem(`practiceFilter:${mode}`);
-                        const obj = raw? (JSON.parse(raw)||{}) : {};
+                        let obj = null;
+                        if (window.StorageUtil && typeof window.StorageUtil.get==='function') {
+                            obj = window.StorageUtil.get(`practiceFilter:${mode}`, null) || {};
+                        } else {
+                            const raw = localStorage.getItem(`practiceFilter:${mode}`);
+                            obj = raw? (JSON.parse(raw)||{}) : {};
+                        }
                         const rules = Object.assign({}, obj.rules||{}, patch);
-                        localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules, ts: new Date().toISOString() }));
+                        if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                            window.StorageUtil.set(`practiceFilter:${mode}`, { rules, ts: new Date().toISOString() });
+                        } else {
+                            localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify({ rules, ts: new Date().toISOString() }));
+                        }
                     } catch(_){ }
                 }
                 closeModal();
@@ -2760,20 +3408,30 @@
         }
 
         function loadSavedData() {
-            const savedQuestions = localStorage.getItem('questions');
-            const savedErrors = localStorage.getItem('errorQuestions');
-            const savedStudyData = localStorage.getItem('studyData');
+            let savedQuestions = null, savedErrors = null, savedStudyData = null;
+            if (window.StorageUtil && typeof window.StorageUtil.get==='function') {
+                savedQuestions = window.StorageUtil.get('questions', null);
+                savedErrors = window.StorageUtil.get('errorQuestions', null);
+                savedStudyData = window.StorageUtil.get('studyData', null);
+            } else {
+                const rq = localStorage.getItem('questions');
+                const re = localStorage.getItem('errorQuestions');
+                const rs = localStorage.getItem('studyData');
+                savedQuestions = rq ? JSON.parse(rq) : null;
+                savedErrors = re ? JSON.parse(re) : null;
+                savedStudyData = rs ? JSON.parse(rs) : null;
+            }
             
             if (savedQuestions) {
-                questions = JSON.parse(savedQuestions);
+                questions = savedQuestions;
             }
             
             if (savedErrors) {
-                errorQuestions = JSON.parse(savedErrors);
+                errorQuestions = savedErrors;
             }
             
             if (savedStudyData) {
-                studyData = JSON.parse(savedStudyData);
+                studyData = savedStudyData;
             }
             
             updateQuestionTable();
@@ -2846,19 +3504,24 @@
             const ok = confirm('将清空本地题库与统计数据，并加载示例题。是否继续？');
             if (!ok) return;
             try {
-                localStorage.removeItem('questions');
-                localStorage.removeItem('errorQuestions');
-                localStorage.removeItem('studyData');
+                const remove = (key) => {
+                    if (window.StorageUtil && typeof window.StorageUtil.remove === 'function') {
+                        window.StorageUtil.remove(key);
+                    } else {
+                        localStorage.removeItem(key);
+                    }
+                };
+                remove('questions');
+                remove('errorQuestions');
+                remove('studyData');
                 // 同步清理模块化存储
-                localStorage.removeItem('eqpp.questions');
-                localStorage.removeItem('eqpp.batches');
+                remove('eqpp.questions');
+                remove('eqpp.batches');
                 // 清除按模式保存的筛选规则，避免影响可见性
-                const keys = [];
-                for (let i = 0; i < localStorage.length; i++) {
-                    const k = localStorage.key(i);
-                    if (k && k.startsWith('practiceFilter:')) keys.push(k);
-                }
-                keys.forEach(k => localStorage.removeItem(k));
+                const keys = (window.StorageUtil && typeof window.StorageUtil.keys === 'function')
+                    ? window.StorageUtil.keys()
+                    : (function(){ const arr=[]; for (let i = 0; i < localStorage.length; i++) { arr.push(localStorage.key(i)); } return arr; })();
+                keys.filter(k => k && k.startsWith('practiceFilter:')).forEach(k => remove(k));
             } catch(_) {}
             // 重置内存变量
             questions = [];
@@ -2869,7 +3532,9 @@
             loadSavedData();
             // 将示例数据同步到模块化题库(eqpp.questions)，以便导出等功能可用
             try {
-                const legacy = JSON.parse(localStorage.getItem('questions')||'[]')||[];
+                const legacy = (window.StorageUtil && typeof window.StorageUtil.get==='function')
+                    ? (window.StorageUtil.get('questions', []) || [])
+                    : (function(){ try { return JSON.parse(localStorage.getItem('questions')||'[]')||[]; } catch(_){ return []; } })();
                 const mapped = legacy.map(q=>({
                     question: q.content || q.question || '',
                     answer: q.correctAnswer || q.answer || '',
@@ -2883,7 +3548,11 @@
                     source: q.source || '',
                     createdAt: q.date ? (String(q.date).includes('T') ? q.date : (q.date + 'T00:00:00')) : (q.lastErrorTime || new Date().toISOString()),
                 }));
-                localStorage.setItem('eqpp.questions', JSON.stringify(mapped));
+                if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                    window.StorageUtil.set('eqpp.questions', mapped);
+                } else {
+                    localStorage.setItem('eqpp.questions', JSON.stringify(mapped));
+                }
             } catch(_){ }
             populateFilterOptions();
             applyQuestionTableFilters();
@@ -2930,34 +3599,45 @@
             const fType = document.getElementById('filter-type').value;
             const fTag = document.getElementById('filter-error-tag').value.toLowerCase();
 
-            // 读取当前模式或最近一次保存的高级筛选规则
+            // 读取当前模式或最近一次保存的高级筛选规则（当基础筛选均为空时不回落到最近保存，避免清空后仍被高级筛选影响）
             let adv = {};
             try {
                 const mode = window.currentPracticeMode || 'normal';
+                const noBasicFilters = !searchTerm && !fKnowledge && !fType && !fTag; // 基础筛选是否均为空
                 let obj = null;
-                const raw = localStorage.getItem(`practiceFilter:${mode}`);
-                if (raw) obj = JSON.parse(raw) || {};
-                if (!obj || !obj.rules) {
-                    // 回落到最近一次保存的规则
+                obj = (window.StorageUtil && typeof window.StorageUtil.get==='function')
+                    ? (window.StorageUtil.get(`practiceFilter:${mode}`, null) || null)
+                    : (function(){ const raw = localStorage.getItem(`practiceFilter:${mode}`); return raw ? (JSON.parse(raw)||null) : null; })();
+                if ((!obj || !obj.rules) && !noBasicFilters) {
+                    // 仅当存在基础筛选或模式设置时，才回落到最近一次保存的规则
                     let latest = null; let latestTs = 0;
-                    for (let i = 0; i < localStorage.length; i++) {
-                        const k = localStorage.key(i);
+                    const keys = (window.StorageUtil && typeof window.StorageUtil.keys==='function')
+                        ? window.StorageUtil.keys()
+                        : (function(){ const arr=[]; for (let i = 0; i < localStorage.length; i++) { arr.push(localStorage.key(i)); } return arr; })();
+                    keys.forEach(k => {
                         if (k && k.startsWith('practiceFilter:')) {
-                            try {
-                                const o = JSON.parse(localStorage.getItem(k) || '{}');
-                                const ts = Date.parse(o.ts || '') || 0;
-                                if (ts > latestTs) { latestTs = ts; latest = o; }
-                            } catch (_) {}
+                            let o = {};
+                            if (window.StorageUtil && typeof window.StorageUtil.get==='function') {
+                                o = window.StorageUtil.get(k, {});
+                            } else {
+                                try { o = JSON.parse(localStorage.getItem(k) || '{}'); } catch(_){ o = {}; }
+                            }
+                            const ts = Date.parse(o.ts || '') || 0;
+                            if (ts > latestTs) { latestTs = ts; latest = o; }
                         }
-                    }
+                    });
                     obj = latest || {};
                 }
-                adv = obj.rules || {};
+                adv = (obj && obj.rules) ? obj.rules : {};
                 // 将当前下拉筛选状态也写回到当前模式，便于进入列表时恢复
                 try {
                     const tableFilters = { knowledge: fKnowledge || '', type: fType || '', tag: document.getElementById('filter-error-tag').value || '' };
-                    const merged = Object.assign({}, obj, { rules: Object.assign({}, adv, { tableFilters }), ts: new Date().toISOString() });
-                    localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify(merged));
+                    const merged = Object.assign({}, obj || {}, { rules: Object.assign({}, adv, { tableFilters }), ts: new Date().toISOString() });
+                    if (window.StorageUtil && typeof window.StorageUtil.set==='function') {
+                        window.StorageUtil.set(`practiceFilter:${mode}`, merged);
+                    } else {
+                        localStorage.setItem(`practiceFilter:${mode}`, JSON.stringify(merged));
+                    }
                 } catch (_) {}
             } catch (_) {}
 
@@ -3090,6 +3770,246 @@
                 nextQuestion();
             }
         });
+        // 全量导出/导入：备份与恢复
+        function setupFullBackup(){
+            try {
+                const btnExport = document.getElementById('full-export');
+                const btnImport = document.getElementById('full-import');
+                const fileInput = document.getElementById('full-import-file');
+                if (!btnExport || !btnImport || !fileInput) return;
+
+                function collectPracticeFilters(){
+                    const map = {};
+                    for (let i=0;i<localStorage.length;i++){
+                        const k = localStorage.key(i);
+                        if (k && k.indexOf('practiceFilter:')===0){
+                            try { map[k] = JSON.parse(localStorage.getItem(k)||'{}'); } catch(_){ map[k] = {}; }
+                        }
+                    }
+                    return map;
+                }
+                function getJSON(key){
+                    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch(_){ return null; }
+                }
+                function setJSON(key, obj){
+                    try { localStorage.setItem(key, JSON.stringify(obj)); return true; } catch(e){ console.warn('[backup.setJSON] failed', key, e); return false; }
+                }
+                function downloadBlob(blob, filename){
+                    try {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = filename; a.style.display='none';
+                        document.body.appendChild(a); a.click();
+                        setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
+                    } catch(e){ console.warn('[backup.download] failed:', e); alert('Failed to download backup.'); }
+                }
+                function pad(n){ return (n<10?'0':'')+n; }
+                function nowStamp(){ const d=new Date(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`; }
+
+                btnExport.addEventListener('click', function(){
+                    try {
+                        const backup = {
+                            meta: { app: 'EQPP', feature: 'full-backup', version: 1, ts: new Date().toISOString() },
+                            payload: {
+                                // 题库/错题与学习索引
+                                questions: getJSON('questions') || [],
+                                errorQuestions: getJSON('errorQuestions') || [],
+                                studyData: getJSON('studyData') || null,
+                                eqpp_questions: getJSON('eqpp.questions') || [],
+                                eqpp_errorQuestions: getJSON('eqpp.errorQuestions') || [],
+                                eqpp_studyIndex: getJSON('eqpp.studyIndex') || {},
+                                // 练习与每日一练设置
+                                practiceSettings: getJSON('practiceSettings') || {},
+                                dailyPracticeSettings: getJSON('dailyPracticeSettings') || {},
+                                // 按模式筛选规则快照
+                                practiceFilters: collectPracticeFilters(),
+                                // 其他可能需要的模块化数据（若有则备份）
+                                eqpp_batches: getJSON('eqpp.batches') || null,
+                                eqpp_mappingTemplates: getJSON('eqpp.mappingTemplates') || null
+                            }
+                        };
+                        const blob = new Blob([JSON.stringify(backup,null,2)], { type: 'application/json;charset=utf-8' });
+                        downloadBlob(blob, `eqpp-backup-${nowStamp()}.json`);
+                    } catch(e) {
+                        console.error('[FullExport] failed:', e);
+                        alert('Export failed.');
+                    }
+                });
+
+                btnImport.addEventListener('click', function(){ fileInput.click(); });
+                fileInput.addEventListener('change', function(ev){
+                    const f = ev.target.files && ev.target.files[0];
+                    if (!f){ return; }
+                    const reader = new FileReader();
+                    reader.onload = function(e){
+                        try {
+                            const text = e.target.result;
+                            const obj = JSON.parse(String(text||'{}'));
+                            if (!obj || !obj.payload){ alert('Invalid backup file.'); return; }
+                            const p = obj.payload || {};
+
+                            // 询问导入模式：合并 or 覆盖
+                            const useMerge = !!confirm('Use MERGE import instead of OVERWRITE?');
+
+                            // 工具：按 id 合并数组，缺失 id 的补充生成
+                            function ensureId(item){
+                                if (!item.id){ item.id = 'Q' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+                                return item.id;
+                            }
+                            function mergeArrayById(currentArr, incomingArr){
+                                const map = new Map();
+                                (currentArr||[]).forEach(it=>{ if (it){ ensureId(it); map.set(it.id, JSON.parse(JSON.stringify(it))); } });
+                                (incomingArr||[]).forEach(it=>{
+                                    if (!it) return; ensureId(it);
+                                    if (map.has(it.id)){
+                                        const prev = map.get(it.id);
+                                        map.set(it.id, Object.assign({}, prev, it));
+                                    } else {
+                                        map.set(it.id, JSON.parse(JSON.stringify(it)));
+                                    }
+                                });
+                                return Array.from(map.values());
+                            }
+                            // 工具：重建 eqpp.questions 映射（与 saveQuestions 一致）
+                            function rebuildEqppQuestions(fromQuestions){
+                                try {
+                                    const mapped = (fromQuestions||[]).map(q=>({
+                                        id: q.id || ('Q' + Date.now().toString(36) + Math.random().toString(36).slice(2,7)),
+                                        question: q.content || q.question || '',
+                                        answer: q.correctAnswer || q.answer || '',
+                                        type: q.type || '',
+                                        difficulty: q.difficulty || '',
+                                        score: q.score || '',
+                                        knowledge: q.knowledge || '',
+                                        analysis: q.analysis || '',
+                                        note: q.correctMethod || q.errorReason || q.note || '',
+                                        tags: Array.isArray(q.errorTags) ? q.errorTags.join(',') : (String(q.tags||'').split(/[，,、\/\s]+/).filter(Boolean).join(',')),
+                                        source: q.source || '',
+                                        createdAt: q.date ? (String(q.date).includes('T') ? q.date : (q.date + 'T00:00:00')) : (q.lastErrorTime || new Date().toISOString()),
+                                    }));
+                                    return mapped;
+                                } catch(_){ return []; }
+                            }
+                            // 工具：合并 studyData（计数求和，天数取较大，其他字段以备份覆盖）
+                            function mergeStudyData(cur, inc){
+                                const c = Object.assign({}, cur||{});
+                                const i = Object.assign({}, inc||{});
+                                const out = Object.assign({}, c, i);
+                                out.totalStudyTime = Number(c.totalStudyTime||0) + Number(i.totalStudyTime||0);
+                                out.totalAnswered = Number(c.totalAnswered||0) + Number(i.totalAnswered||0);
+                                out.totalErrors   = Number(c.totalErrors||0)   + Number(i.totalErrors||0);
+                                out.studyDays     = Math.max(Number(c.studyDays||0), Number(i.studyDays||0));
+                                return out;
+                            }
+                            // 工具：合并 eqpp.studyIndex（次数求和，时间取最新）
+                            function mergeStudyIndex(cur, inc){
+                                const out = Object.assign({}, cur||{});
+                                const keys = new Set([].concat(Object.keys(cur||{}), Object.keys(inc||{})));
+                                keys.forEach(id=>{
+                                    const a = (cur||{})[id]||{}; const b=(inc||{})[id]||{};
+                                    const cnt = Number(a.answeredCount||0) + Number(b.answeredCount||0);
+                                    const t1 = Date.parse(a.lastAnsweredTime||'')||0;
+                                    const t2 = Date.parse(b.lastAnsweredTime||'')||0;
+                                    const latest = (t2>=t1)? (b.lastAnsweredTime||a.lastAnsweredTime||'') : (a.lastAnsweredTime||b.lastAnsweredTime||'');
+                                    out[id] = { answeredCount: cnt, lastAnsweredTime: latest };
+                                });
+                                return out;
+                            }
+                            // 工具：对象浅合并（以备份覆盖同名键），用于 settings 与 mappingTemplates
+                            function mergeShallow(cur, inc){ return Object.assign({}, cur||{}, inc||{}); }
+                            // 工具：数组简单合并（去重），用于 batches（若结构有 id 则按 id 去重）
+                            function mergeArraySimple(cur, inc){
+                                const a = Array.isArray(cur)? cur : []; const b = Array.isArray(inc)? inc: [];
+                                const seen = new Set(); const out=[];
+                                a.concat(b).forEach(x=>{
+                                    if (!x) return; const key = (typeof x==='object' && x.id)? ('id:'+x.id) : JSON.stringify(x);
+                                    if (seen.has(key)) return; seen.add(key); out.push(x);
+                                });
+                                return out;
+                            }
+
+                            if (!useMerge){
+                                // 覆盖式导入（原有逻辑）
+                                if (p.questions) setJSON('questions', p.questions);
+                                if (p.errorQuestions) setJSON('errorQuestions', p.errorQuestions);
+                                if (p.studyData!==undefined) setJSON('studyData', p.studyData||{});
+                                if (p.eqpp_questions) setJSON('eqpp.questions', p.eqpp_questions);
+                                if (p.eqpp_errorQuestions) setJSON('eqpp.errorQuestions', p.eqpp_errorQuestions);
+                                if (p.eqpp_studyIndex) setJSON('eqpp.studyIndex', p.eqpp_studyIndex);
+                                if (p.practiceSettings) setJSON('practiceSettings', p.practiceSettings);
+                                if (p.dailyPracticeSettings) setJSON('dailyPracticeSettings', p.dailyPracticeSettings);
+                                if (p.eqpp_batches!==undefined) setJSON('eqpp.batches', p.eqpp_batches||[]);
+                                if (p.eqpp_mappingTemplates!==undefined) setJSON('eqpp.mappingTemplates', p.eqpp_mappingTemplates||{});
+                                const filters = p.practiceFilters || {};
+                                for (const k in filters){ if (!filters.hasOwnProperty(k)) continue; if (k && k.indexOf('practiceFilter:')===0){ setJSON(k, filters[k]); } }
+                            } else {
+                                // 合并式导入
+                                const curQ = getJSON('questions') || [];
+                                const curE = getJSON('errorQuestions') || [];
+                                const curSD= getJSON('studyData') || {};
+                                const curEQ= getJSON('eqpp.questions') || [];
+                                const curEE= getJSON('eqpp.errorQuestions') || [];
+                                const curSI= getJSON('eqpp.studyIndex') || {};
+                                const curPS= getJSON('practiceSettings') || {};
+                                const curDP= getJSON('dailyPracticeSettings') || {};
+                                const curBT= getJSON('eqpp.batches') || [];
+                                const curMT= getJSON('eqpp.mappingTemplates') || {};
+                                // 合并主题库与错题（按 id）
+                                const mergedQ = mergeArrayById(curQ, p.questions||[]);
+                                const mergedE = mergeArrayById(curE, p.errorQuestions||[]);
+                                setJSON('questions', mergedQ);
+                                setJSON('errorQuestions', mergedE);
+                                // 重建 eqpp.* 映射以与主数组一致
+                                setJSON('eqpp.questions', rebuildEqppQuestions(mergedQ));
+                                setJSON('eqpp.errorQuestions', (mergedE||[]).map(q=>({
+                                    id: q.id || ('Q' + Date.now().toString(36) + Math.random().toString(36).slice(2,7)),
+                                    question: q.content || q.question || '',
+                                    answer: q.correctAnswer || q.answer || '',
+                                    type: q.type || '',
+                                    knowledge: q.knowledge || '',
+                                    analysis: q.analysis || '',
+                                    note: q.correctMethod || q.errorReason || q.note || '',
+                                    tags: Array.isArray(q.errorTags) ? q.errorTags.join(',') : (String(q.tags||'').split(/[，,、\/\s]+/).filter(Boolean).join(',')),
+                                    source: q.source || '',
+                                    errorCount: Number(q.errorCount || 0),
+                                    lastErrorTime: q.lastErrorTime || new Date().toISOString(),
+                                    createdAt: q.date ? (String(q.date).includes('T') ? q.date : (q.date + 'T00:00:00')) : (q.lastErrorTime || new Date().toISOString()),
+                                })));
+                                // 合并学习数据与索引
+                                setJSON('studyData', mergeStudyData(curSD, p.studyData||{}));
+                                setJSON('eqpp.studyIndex', mergeStudyIndex(curSI, p.eqpp_studyIndex||{}));
+                                // 合并设置
+                                setJSON('practiceSettings', mergeShallow(curPS, p.practiceSettings||{}));
+                                setJSON('dailyPracticeSettings', mergeShallow(curDP, p.dailyPracticeSettings||{}));
+                                // 合并 batches 与 mappingTemplates
+                                setJSON('eqpp.batches', mergeArraySimple(curBT, p.eqpp_batches||[]));
+                                setJSON('eqpp.mappingTemplates', mergeShallow(curMT, p.eqpp_mappingTemplates||{}));
+                                // 合并规则快照（备份优先覆盖同名键）
+                                const filters = p.practiceFilters || {};
+                                for (const k in filters){ if (!filters.hasOwnProperty(k)) continue; if (k && k.indexOf('practiceFilter:')===0){ setJSON(k, filters[k]); } }
+                            }
+
+                            // 派发事件以刷新界面
+                            try { window.dispatchEvent(new CustomEvent('legacy:questions:updated', { detail: {} })); } catch(_){ }
+                            try { window.dispatchEvent(new CustomEvent('legacy:errorQuestions:updated', { detail: {} })); } catch(_){ }
+                            try { window.dispatchEvent(new CustomEvent('eqpp:questions:updated', { detail: { origin: 'import' } })); } catch(_){ }
+                            try { window.dispatchEvent(new CustomEvent('eqpp:errorQuestions:updated', { detail: { origin: 'import' } })); } catch(_){ }
+                            try { window.dispatchEvent(new CustomEvent('legacy:studyData:updated', { detail: {} })); } catch(_){ }
+                            // 刷新列表与统计
+                            try { if (typeof refreshAfterDataChange==='function') refreshAfterDataChange(); } catch(_){ }
+                            alert(useMerge? 'Merge import completed successfully.' : 'Import completed successfully.');
+                        } catch(err){
+                            console.error('[FullImport] failed:', err);
+                            alert('Import failed.');
+                        } finally {
+                            try { fileInput.value=''; } catch(_){ }
+                        }
+                    };
+                    reader.onerror = function(){ alert('Failed to read file.'); };
+                    reader.readAsText(f, 'utf-8');
+                });
+            } catch(e){ console.warn('[setupFullBackup] failed:', e); }
+        }
     </script>
     <script src="./assets/js/filter_core.js"></script>
     <script type="module" src="./assets/js/test/practice_auto.js"></script>

@@ -114,9 +114,9 @@ export function attachBulk(){
   const container = document.querySelector('#question-bank .p-6 .flex');
   if (container){
     const btn = document.createElement('button');
-    btn.className = 'bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors';
-    btn.innerHTML = '<i class="fa fa-tasks mr-2"></i>批量操作';
-    btn.style.marginLeft = '8px';
+    btn.className = 'bg-primary hover:bg-blue-700 text-white h-10 px-4 rounded-lg transition-colors';
+    btn.setAttribute('aria-label', '批量操作');
+    btn.innerHTML = '<i class="fa fa-tasks"></i>';
     btn.addEventListener('click', (e)=>{ e.preventDefault(); bulkUI(); });
     container.appendChild(btn);
   }

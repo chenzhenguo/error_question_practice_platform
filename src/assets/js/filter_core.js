@@ -33,7 +33,9 @@
       // new: questionCount and timeRange
       const questionCount = Number.isFinite(+rules.questionCount) ? Math.max(0, parseInt(rules.questionCount)) : 0;
       const timeRange = (rules.timeRange && typeof rules.timeRange==='object') ? rules.timeRange : {};
-      return { types, tags, tagLogic, knowledge, tableFilters, questionCount, timeRange };
+      const preferUndone = !!rules.preferUndone;
+      const onlyUndone = !!rules.onlyUndone;
+      return { types, tags, tagLogic, knowledge, tableFilters, questionCount, timeRange, preferUndone, onlyUndone };
     }catch(_){ return {}; }
   }
   function matchByListAND(itemList, ruleList){
@@ -84,9 +86,8 @@
         if (timeRange.to){ const t = Date.parse(timeRange.to + 'T23:59:59'); if (!Number.isNaN(t)) toTs = Math.min(toTs, t); }
       }
       const t = q.lastErrorTimeTs || 0;
-      // if question has no time info, treat as not matched when a time filter exists
-      if (!t) return false;
-      if (t < fromTs || t > toTs) return false;
+      // 修改：当题目没有时间戳信息时，不强制排除，默认通过时间筛选
+      if (t && (t < fromTs || t > toTs)) return false;
     }
 
     // future: answerRange/errorRange/date ranges using studyData

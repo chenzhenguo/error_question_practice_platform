@@ -186,11 +186,11 @@
 
   function shouldRun(){
     try{
-      const u = new URL(location.href);
-      if (u.searchParams.get('autoPractice') === '1') return true;
-      if (window.__AUTO_PRACTICE__ === true) return true;
-    }catch(_){}
-    return false;
+      const url = new URL(location.href);
+      const ok = !!url.searchParams.get('autoPractice');
+      if (window.AutoCoordinator && !window.AutoCoordinator.shouldRun('practice')) return false;
+      return ok;
+    }catch(_){ return false; }
   }
 
   if (document.readyState === 'loading'){
@@ -203,3 +203,28 @@
     if (shouldRun()) setTimeout(runAll, 600);
   }
 })();
+
+async function run(){
+  if (window.AutoCoordinator && !window.AutoCoordinator.acquireLock('practice')) return;
+  try{
+    await ensurePracticeStarted('normal');
+    // Step1: enable autoNext
+    setCheckbox('setting-auto-next', true);
+    // Ensure memorize off for this case
+    setCheckbox('setting-memorize', false);
+    const startIdx = window.currentQuestionIndex||0;
+    await selectCorrect();
+    await sleep(700); // wait for auto jump (0.5s + buffer)
+    const idxAfter = window.currentQuestionIndex||0;
+    log('TC031:afterAutoNext', {startIdx, idxAfter});
+    // Step2: disable autoNext and answer next correct
+    setCheckbox('setting-auto-next', false);
+    await selectCorrect();
+    await sleep(600);
+    const idxAfter2 = window.currentQuestionIndex||0;
+    log('TC031:afterManualRemain', {idxAfter2});
+    log('TC031:done');
+  } finally {
+    try{ window.AutoCoordinator.releaseLock('practice'); }catch(_){}
+  }
+}
